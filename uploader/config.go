@@ -17,10 +17,15 @@ type Config struct {
 	URL             string           `toml:"url"`
 	CacheTTL        *config.Duration `toml:"cache-ttl"`
 	IgnoredPatterns []string         `toml:"ignored-patterns,omitempty"` // points, points-reverse
+	MaxFailCount    int32            `toml:"max-fail-count,omitempty"`   // throttle incoming connections
 }
 
 func (cfg *Config) Parse() error {
 	var err error
+
+	if cfg.MaxFailCount < 0 {
+		cfg.MaxFailCount = 0
+	}
 
 	if cfg.Date != "" {
 		cfg.TreeDate, err = time.ParseInLocation("2006-01-02", cfg.Date, time.Local)

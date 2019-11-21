@@ -23,6 +23,7 @@ type commonConfig struct {
 	MetricInterval *config.Duration `toml:"metric-interval"`
 	MetricEndpoint string           `toml:"metric-endpoint"`
 	MaxCPU         int              `toml:"max-cpu"`
+	MaxFailCount   int32            `toml:"max-fail-count,omitempty"` // throttle incoming connections
 }
 
 type clickhouseConfig struct {
@@ -112,6 +113,7 @@ func NewConfig() *Config {
 			},
 			MetricEndpoint: MetricEndpointLocal,
 			MaxCPU:         1,
+			MaxFailCount:   0,
 		},
 		Logging: nil,
 		Data: dataConfig{

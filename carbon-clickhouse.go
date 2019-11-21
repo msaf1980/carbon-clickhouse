@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/lomik/carbon-clickhouse/uploadstate"
+
 	"github.com/lomik/carbon-clickhouse/carbon"
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
 	"github.com/lomik/zapwriter"
@@ -110,6 +112,8 @@ func main() {
 	}
 
 	cfg := app.Config
+
+	uploadstate.Init(cfg.Common.MaxFailCount)
 
 	if err = zapwriter.ApplyConfig(cfg.Logging); err != nil {
 		log.Fatal(err)

@@ -223,6 +223,7 @@ func (app *App) Start() (err error) {
 		if err := os.MkdirAll(uploaderDir, 0755); err != nil {
 			return err
 		}
+		uploaderConfig.MaxFailCount = conf.Common.MaxFailCount
 		up, err := uploader.New(uploaderDir, uploaderName, uploaderConfig)
 		if err != nil {
 			return err

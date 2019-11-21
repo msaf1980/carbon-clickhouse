@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lomik/carbon-clickhouse/uploadstate"
+
 	"github.com/lomik/carbon-clickhouse/helper/stop"
 	"go.uber.org/zap"
 )
@@ -155,20 +157,30 @@ func (u *Base) uploadWorker(ctx context.Context) {
 
 			if err != nil {
 				atomic.AddUint32(&u.stat.errors, 1)
-				logger.Error("handle failed",
-					zap.Error(err),
-					zap.Duration("time", time.Since(startTime)),
-				)
+				if u.config.MaxFailCount > 0 && uploadstate.Incr() {
+					logger.Error("handle failed, throttle",
+						zap.Error(err),
+						zap.Duration("time", time.Since(startTime)),
+					)
+				} else {
+					logger.Error("handle failed",
+						zap.Error(err),
+						zap.Duration("time", time.Since(startTime)),
+					)
+				}
 
 				time.Sleep(time.Second)
 			} else {
 				atomic.AddUint32(&u.stat.uploaded, 1)
-				logger.Info("handle success",
-					zap.Duration("time", time.Since(startTime)),
-				)
-			}
-
-			if err == nil {
+				if u.config.MaxFailCount > 0 && uploadstate.Decr() {
+					logger.Info("handle success, throttle ended",
+						zap.Duration("time", time.Since(startTime)),
+					)
+				} else {
+					logger.Info("handle success",
+						zap.Duration("time", time.Since(startTime)),
+					)
+				}
 				u.MarkAsFinished(filename)
 			}
 			u.RemoveFromQueue(filename)

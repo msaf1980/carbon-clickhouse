@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/lomik/carbon-clickhouse/uploadstate"
 )
 
 // TCP receive metrics from TCP connections
@@ -58,6 +60,10 @@ func (rcv *TCP) HandleConnection(conn net.Conn) {
 	var err error
 
 	for {
+		if uploadstate.IsFail() {
+			break
+		}
+
 		if rcv.readTimeoutSeconds == 0 {
 			conn.SetReadDeadline(time.Time{})
 		} else {

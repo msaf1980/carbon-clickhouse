@@ -81,6 +81,8 @@ metric-endpoint = "local"
 metric-interval = "1m0s"
 # GOMAXPROCS
 max-cpu = 1
+# If max-fail-count > 0 - throttle incomming tcp connections if fail count reached
+#max-fail-coount = 0
 
 [logging]
 # "stderr", "stdout" can be used as file name
