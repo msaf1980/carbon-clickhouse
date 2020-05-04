@@ -2,8 +2,8 @@ package uploader
 
 import (
 	"bytes"
-	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
@@ -52,6 +52,9 @@ func (u *Index) parseFile(filename string, out io.Writer) (map[string]bool, erro
 		treeDate = RowBinary.TimestampToDays(uint32(u.config.TreeDate.Unix()))
 	}
 
+	var key string
+	reverseNameBuf := make([]byte, 4096)
+
 LineLoop:
 	for {
 		name, err := reader.ReadRecord()
@@ -64,7 +67,9 @@ LineLoop:
 			continue
 		}
 
-		key := fmt.Sprintf("%d:%s", reader.Days(), unsafeString(name))
+		//key := fmt.Sprintf("%d:%s", reader.Days(), unsafeString(name))
+		// replaced with more perfomance equivalent
+		key = strconv.FormatInt(int64(reader.Days()), 10) + ":" + unsafeString(name)
 
 		if u.existsCache.Exists(key) {
 			continue LineLoop
@@ -86,9 +91,15 @@ LineLoop:
 		wb.WriteBytes(name)
 		wb.WriteUint32(version)
 
-		reverseName := RowBinary.ReverseBytes(name)
-
+		//reverseName := RowBinary.ReverseBytes(name)
+		l = len(name)
+		if l > len(reverseNameBuf) {
+			reverseNameBuf = make([]byte, len(name)+4096)
+		}
+		reverseName := reverseNameBuf[0:l]
+		RowBinary.ReverseBytesTo(reverseName, name)
 		// Reverse path with date
+
 		wb.WriteUint16(reader.Days())
 		wb.WriteUint32(uint32(level + ReverseLevelOffset))
 		wb.WriteBytes(reverseName)
