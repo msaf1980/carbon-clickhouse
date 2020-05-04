@@ -12,6 +12,12 @@ all: build
 build:
 	$(GO) build github.com/lomik/$(NAME)
 
+test:
+	$(GO) test github.com/lomik/$(NAME)/receiver
+	$(GO) test github.com/lomik/$(NAME)/uploader
+	$(GO) test github.com/lomik/$(NAME)/helper/RowBinary
+	$(GO) test github.com/lomik/$(NAME)/helper/tags
+
 gox-build:
 	rm -rf out
 	mkdir -p out
