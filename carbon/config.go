@@ -82,6 +82,7 @@ type dataConfig struct {
 	Path         string                    `toml:"path"`
 	FileInterval *config.Duration          `toml:"chunk-interval"`
 	AutoInterval *config.ChunkAutoInterval `toml:"chunk-auto-interval"`
+	MaxSize      int                       `toml:"chunk-max-size"`
 	CompAlgo     *config.Compression       `toml:"compression"`
 	CompLevel    int                       `toml:"compression-level"`
 }

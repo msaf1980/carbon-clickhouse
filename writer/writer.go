@@ -33,6 +33,7 @@ type Writer struct {
 		writtenBytes  uint32
 		unhandled     uint32
 		chunkInterval uint32
+		size          int
 	}
 	inputChan    chan *RowBinary.WriteBuffer
 	path         string
@@ -145,6 +146,7 @@ func (w *Writer) worker(ctx context.Context) {
 			out = nil
 			cwr = nil
 			outBuf = nil
+			w.stat.size = 0
 		}
 
 		var err error
@@ -210,26 +212,18 @@ func (w *Writer) worker(ctx context.Context) {
 		}
 	}
 
+	maxSize := w.autoInterval.GetMaxSize()
 	// open first file
 	rotate()
 
 	tickerC := make(chan struct{}, 1)
 
-	go func() {
-		prevInterval := w.autoInterval.GetDefault()
+	go func(d time.Duration) {
 		for {
-			u := int(atomic.LoadUint32(&w.stat.unhandled))
-			interval := w.autoInterval.GetInterval(u)
-			if interval != prevInterval {
-				w.logger.Info("chunk interval changed", zap.String("interval", interval.String()))
-				prevInterval = interval
-			}
-			atomic.StoreUint32(&w.stat.chunkInterval, uint32(interval.Seconds()))
-
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(interval):
+			case <-time.After(d):
 				select {
 				case tickerC <- struct{}{}:
 					// pass
@@ -238,7 +232,7 @@ func (w *Writer) worker(ctx context.Context) {
 				}
 			}
 		}
-	}()
+	}(w.autoInterval.GetMinInterval() / 10)
 
 	write := func(b *RowBinary.WriteBuffer) {
 		_, err := outBuf.Write(b.Body[:b.Used])
@@ -259,12 +253,35 @@ func (w *Writer) worker(ctx context.Context) {
 		b.Release()
 	}
 
+	prevInterval := w.autoInterval.GetDefault()
+	prevTime := time.Now()
 	for {
 		select {
 		case b := <-w.inputChan:
+			if maxSize > 0 {
+				if w.stat.size+b.Used > maxSize {
+					rotate()
+					prevTime = time.Now()
+					w.stat.size = b.Used
+
+				} else {
+					w.stat.size += b.Used
+				}
+			}
 			write(b)
 		case <-tickerC:
-			rotate()
+			u := int(atomic.LoadUint32(&w.stat.unhandled))
+			interval := w.autoInterval.GetInterval(u)
+			if interval != prevInterval {
+				w.logger.Info("chunk interval changed", zap.String("interval", interval.String()))
+				prevInterval = interval
+				atomic.StoreUint32(&w.stat.chunkInterval, uint32(interval.Seconds()))
+			}
+			t := time.Now()
+			if t.Sub(prevTime) > interval {
+				rotate()
+				prevTime = t
+			}
 		case <-ctx.Done():
 			return
 		default: // outBuf flush if nothing received

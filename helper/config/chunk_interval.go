@@ -16,6 +16,7 @@ type chunkIntervalRule struct {
 type ChunkAutoInterval struct {
 	rules           []chunkIntervalRule
 	defaultInterval time.Duration
+	maxSize         int
 }
 
 func NewChunkAutoInterval() *ChunkAutoInterval {
@@ -24,8 +25,9 @@ func NewChunkAutoInterval() *ChunkAutoInterval {
 	}
 }
 
-func (c *ChunkAutoInterval) SetDefault(v time.Duration) {
+func (c *ChunkAutoInterval) SetDefault(v time.Duration, maxSize int) {
 	c.defaultInterval = v
+	c.maxSize = maxSize
 }
 
 // UnmarshalText from TOML
@@ -82,4 +84,19 @@ func (c *ChunkAutoInterval) GetInterval(unhandledCount int) time.Duration {
 
 func (c *ChunkAutoInterval) GetDefault() time.Duration {
 	return c.defaultInterval
+}
+
+func (c *ChunkAutoInterval) GetMinInterval() time.Duration {
+	d := c.GetDefault()
+	for i := 0; i < len(c.rules); i++ {
+		if d > c.rules[i].interval {
+			d = c.rules[i-1].interval
+		}
+	}
+
+	return d
+}
+
+func (c *ChunkAutoInterval) GetMaxSize() int {
+	return c.maxSize
 }

@@ -198,7 +198,7 @@ func (app *App) Start() (err error) {
 		uploaders = append(uploaders, t)
 	}
 
-	conf.Data.AutoInterval.SetDefault(conf.Data.FileInterval.Value())
+	conf.Data.AutoInterval.SetDefault(conf.Data.FileInterval.Value(), conf.Data.MaxSize)
 
 	if err := os.MkdirAll(conf.Data.Path, 0755); err != nil {
 		return err
