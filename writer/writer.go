@@ -262,12 +262,10 @@ func (w *Writer) worker(ctx context.Context) {
 				if w.stat.size+b.Used > maxSize {
 					rotate()
 					prevTime = time.Now()
-					w.stat.size = b.Used
-
-				} else {
-					w.stat.size += b.Used
+					w.stat.size = 0
 				}
 			}
+			w.stat.size += b.Used
 			write(b)
 		case <-tickerC:
 			u := int(atomic.LoadUint32(&w.stat.unhandled))
@@ -278,7 +276,7 @@ func (w *Writer) worker(ctx context.Context) {
 				atomic.StoreUint32(&w.stat.chunkInterval, uint32(interval.Seconds()))
 			}
 			t := time.Now()
-			if t.Sub(prevTime) > interval {
+			if t.Sub(prevTime) > interval && w.stat.size > 0 {
 				rotate()
 				prevTime = t
 			}
@@ -291,15 +289,6 @@ func (w *Writer) worker(ctx context.Context) {
 				if err := cwr.Flush(); err != nil {
 					w.logger.Error("CompWriter Flush() failed", zap.Error(err))
 				}
-			}
-
-			select {
-			case b := <-w.inputChan:
-				write(b)
-			case <-tickerC:
-				rotate()
-			case <-ctx.Done():
-				return
 			}
 		}
 	}
