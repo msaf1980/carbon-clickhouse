@@ -16,13 +16,17 @@ github.com/lomik/stop v0.0.0-20161127103810-188e98d969bd h1:hUNpVzZOYNANa5s8XMBE
 github.com/lomik/stop v0.0.0-20161127103810-188e98d969bd/go.mod h1:3pLqdYIrxHYk+VsfIlrTcBD9J34YkGq8iN9yzJuhrP0=
 github.com/lomik/zapwriter v0.0.0-20170315193840-d4499a33b592 h1:NEjGY17W0lNlYFX9i7GupGjrJojX2Ilhy4XebC+86+w=
 github.com/lomik/zapwriter v0.0.0-20170315193840-d4499a33b592/go.mod h1:8xn4WUTM35HWUh6BGz2NkXFmD2l4D420gb4lL8OPJcg=
+github.com/mailru/go-clickhouse v1.3.0/go.mod h1:MRUTPjUvZIjSa0dop27y1HVKBTQ7kt27BD9TpIrgWjw=
 github.com/pierrec/lz4 v1.0.1 h1:w6GMGWSsCI04fTM8wQRdnW74MuJISakuUU0onU0TYB4=
 github.com/pierrec/lz4 v2.5.2+incompatible h1:WCjObylUIOlKy/+7Abdn34TLIkXiA4UWUMhxq9m9ZXI=
 github.com/pierrec/lz4 v2.5.2+incompatible/go.mod h1:pdkljMzZIN41W+lC3N2tnIh5sFi+IEE17M5jbnwPHcY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/satori/go.uuid v1.1.0/go.mod h1:dA0hQrYB0VpLJoorglMZABFdXlWrHn1NEOzdhQKdks0=
+github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.2.1 h1:52QO5WkIUcHGIR7EnGagH88x1bUzqGXTC5/1bDTUQ7U=
 github.com/stretchr/testify v1.2.1/go.mod h1:a8OnRcib4nhh0OaRAV+Yts87kKdq0PP7pXfy6kDkUVs=
+github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 go.uber.org/atomic v1.3.1 h1:U8WaWEmp56LGz7PReduqHRVF6zzs9GbMC2NEZ42dxSQ=
 go.uber.org/atomic v1.3.1/go.mod h1:gD2HeocX3+yG+ygLZcrzQJaqmWj9AIm7n08wl/qW/PE=
 go.uber.org/multierr v1.1.0 h1:HoEmRHQPVSqub6w2z2d2EOVs2fjyFRGyofhKuyDq0QI=

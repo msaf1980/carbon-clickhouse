@@ -47,3 +47,7 @@ func SlowTimestampToDays(timestamp uint32) uint16 {
 	t := time.Unix(int64(timestamp), 0)
 	return uint16(time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC).Unix() / 86400)
 }
+
+func SlowTimeToDays(t time.Time) uint16 {
+	return uint16(t.Unix() / 86400)
+}
