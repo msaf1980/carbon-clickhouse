@@ -25,14 +25,16 @@ func NewSeries(base *Base, reverse bool) *Series {
 	return u
 }
 
-func (u *Series) parseFile(filename string, out io.Writer) (uint64, map[string]bool, error) {
+func (u *Series) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
 	var n uint64
+	var skipped uint64
+	var skippedTree uint64
 
 	reader, err = RowBinary.NewReader(filename, u.isReverse)
 	if err != nil {
-		return n, nil, err
+		return n, skipped, skippedTree, nil, err
 	}
 	defer reader.Close()
 
@@ -77,11 +79,11 @@ LineLoop:
 
 		_, err = out.Write(wb.Bytes())
 		if err != nil {
-			return n, nil, err
+			return n, skipped, skippedTree, nil, err
 		}
 	}
 
 	wb.Release()
 
-	return n, newSeries, nil
+	return n, skipped, skippedTree, newSeries, nil
 }

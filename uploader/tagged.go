@@ -48,14 +48,16 @@ func urlParse(rawurl string) (*url.URL, error) {
 	return m, err
 }
 
-func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, map[string]bool, error) {
+func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
 	var n uint64
+	var skipped uint64
+	var skippedTree uint64
 
 	reader, err = RowBinary.NewReader(filename, false)
 	if err != nil {
-		return n, nil, err
+		return n, skipped, skippedTree, nil, err
 	}
 	defer reader.Close()
 
@@ -133,9 +135,9 @@ LineLoop:
 
 		_, err = out.Write(wb.Bytes())
 		if err != nil {
-			return n, nil, err
+			return n, skipped, skippedTree, nil, err
 		}
 	}
 
-	return n, newTagged, nil
+	return n, skipped, skippedTree, newTagged, nil
 }

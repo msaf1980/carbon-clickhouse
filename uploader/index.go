@@ -174,14 +174,16 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16) 
 	return newSeries, nil
 }
 
-func (u *Index) parseFile(filename string, out io.Writer) (uint64, map[string]bool, error) {
+func (u *Index) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
 	var n uint64
+	var skipped uint64
+	var skippedTree uint64
 
 	reader, err = RowBinary.NewReader(filename, false)
 	if err != nil {
-		return n, nil, err
+		return n, skipped, skippedTree, nil, err
 	}
 	defer reader.Close()
 
@@ -230,11 +232,13 @@ LineLoop:
 
 	newSeries, err := u.cacheBatchRecheck(nocacheSeries, treeDate)
 	if err != nil {
-		return n, nil, err
+		return n, skipped, skippedTree, nil, err
 	}
 
 	for _, v := range nocacheSeries {
 		if v.found {
+			skipped++
+			skippedTree++
 			continue
 		}
 		n++
@@ -256,7 +260,9 @@ LineLoop:
 		wb.WriteBytes(reverseName)
 		wb.WriteUint32(version)
 
-		if !v.foundTree {
+		if v.foundTree {
+			skippedTree++
+		} else {
 			// Tree
 			wb.WriteUint16(treeDate)
 			wb.WriteUint32(uint32(level + TreeLevelOffset))
@@ -290,11 +296,11 @@ LineLoop:
 
 		_, err = out.Write(wb.Bytes())
 		if err != nil {
-			return n, nil, err
+			return n, skipped, skippedTree, nil, err
 		}
 	}
 
 	wb.Release()
 
-	return n, newSeries, nil
+	return n, skipped, skippedTree, newSeries, nil
 }

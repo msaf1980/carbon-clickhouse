@@ -29,7 +29,7 @@ type Base struct {
 	queue   chan string
 	inQueue map[string]bool
 	logger  *zap.Logger
-	handler func(ctx context.Context, logger *zap.Logger, filename string) (uint64, error) // upload single file
+	handler func(ctx context.Context, logger *zap.Logger, filename string) (uint64, uint64, uint64, error) // upload single file
 	query   string
 
 	stat struct {
@@ -176,12 +176,14 @@ func (u *Base) uploadWorker(ctx context.Context) {
 			logger := u.logger.With(zap.String("filename", filename))
 			logger.Info("start handle")
 
-			n, err := u.handler(ctx, logger, filename)
+			n, skipped, skippedTree, err := u.handler(ctx, logger, filename)
 
 			if err != nil {
 				atomic.AddUint32(&u.stat.errors, 1)
 				logger.Error("handle failed",
 					zap.Uint64("metrics", n),
+					zap.Uint64("skipped", skipped),
+					zap.Uint64("skipped_tree", skippedTree),
 					zap.Error(err),
 					zap.Duration("time", time.Since(startTime)),
 				)
@@ -192,6 +194,8 @@ func (u *Base) uploadWorker(ctx context.Context) {
 				atomic.AddUint64(&u.stat.uploadedMetrics, n)
 				logger.Info("handle success",
 					zap.Uint64("metrics", n),
+					zap.Uint64("skipped", skipped),
+					zap.Uint64("skipped_tree", skippedTree),
 					zap.Duration("time", time.Since(startTime)),
 				)
 			}
