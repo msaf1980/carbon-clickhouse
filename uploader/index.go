@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
+	"github.com/lomik/zapwriter"
 	_ "github.com/mailru/go-clickhouse"
+	"go.uber.org/zap"
 )
 
 type Index struct {
@@ -25,13 +27,12 @@ const ReverseTreeLevelOffset = 30000
 
 const DefaultTreeDate = 42 // 1970-02-12
 
-const indexQueryS = "SELECT Date, Path FROM graphite_index WHERE "
+const indexQueryS = "SELECT Date, Path FROM %s WHERE "
 const indexQueryE = " GROUP BY Path, Date ORDER BY Path, Date ASC"
 
 type indexRow struct {
 	days      uint16
 	name      []byte
-	sname     string
 	found     bool
 	foundTree bool
 }
@@ -43,17 +44,17 @@ func NewIndex(base *Base) *Index {
 	return u
 }
 
-func filterAddPath(sb *strings.Builder, ir indexRow) {
+func filterAddPath(sb *strings.Builder, name string) {
 	if sb.Len() == 0 {
-		sb.WriteString("'" + ir.sname + "'")
+		sb.WriteString("'" + name + "'")
 	} else {
-		sb.WriteString(", '" + ir.sname + "'")
+		sb.WriteString(", '" + name + "'")
 	}
 }
 
-func queryString(sb *strings.Builder, days uint16, treeDays uint16) string {
+func indexQueryString(sb *strings.Builder, days uint16, treeDays uint16, tableName string) string {
 	var fsb strings.Builder
-	fsb.WriteString(indexQueryS)
+	fsb.WriteString(fmt.Sprintf(indexQueryS, tableName))
 
 	t := time.Unix(86400*int64(days), 0)
 	treeT := time.Unix(86400*int64(treeDays), 0)
@@ -80,8 +81,10 @@ func checkTreeIndex(indexes map[string]indexRow, path string, days uint16) error
 	return fmt.Errorf("root key '%s' not found during index lookup, may be wrong filter generated", keySearch)
 }
 
-func (u *Index) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, indexes map[string]indexRow, days uint16, treeDays uint16) error {
-	query := fmt.Sprintf(queryString(sb, days, treeDays))
+func (u *Index) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, indexes map[string]indexRow, days uint16, treeDays uint16, filename string) error {
+	logger := zapwriter.Logger("index")
+	query := indexQueryString(sb, days, treeDays, u.config.TableName)
+	logger.Debug("cache", zap.String("query", query), zap.String("filename", filename))
 	rows, err := connect.Query(query)
 	if err != nil {
 		return err
@@ -125,7 +128,7 @@ func (u *Index) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, indexes ma
 	return nil
 }
 
-func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16) (map[string]bool, error) {
+func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, filename string) (map[string]bool, error) {
 	newSeries := make(map[string]bool)
 	if len(indexes) == 0 {
 		return newSeries, nil
@@ -144,7 +147,7 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16) 
 	var filterSb strings.Builder
 	for _, v := range indexes {
 		if n > 5000 || (n > 0 && days != v.days) {
-			err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays)
+			err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename)
 			if err != nil {
 				return nil, err
 			}
@@ -155,12 +158,12 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16) 
 		if days != v.days {
 			days = v.days
 		}
-		filterAddPath(&filterSb, v)
+		filterAddPath(&filterSb, unsafeString(v.name))
 		n++
 	}
 
 	if n > 0 {
-		err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays)
+		err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename)
 		if err != nil {
 			return nil, err
 		}
@@ -212,8 +215,7 @@ LineLoop:
 			continue
 		}
 
-		sname := unsafeString(name)
-		key := fmt.Sprintf("%d:%s", reader.Days(), sname)
+		key := fmt.Sprintf("%d:%s", reader.Days(), unsafeString(name))
 
 		if u.existsCache.Exists(key) {
 			continue LineLoop
@@ -224,13 +226,12 @@ LineLoop:
 		}
 
 		nocacheSeries[key] = indexRow{
-			days:  reader.Days(),
-			name:  name,
-			sname: sname,
+			days: reader.Days(),
+			name: []byte(string(name)),
 		}
 	}
 
-	newSeries, err := u.cacheBatchRecheck(nocacheSeries, treeDate)
+	newSeries, err := u.cacheBatchRecheck(nocacheSeries, treeDate, filename)
 	if err != nil {
 		return n, skipped, skippedTree, nil, err
 	}
