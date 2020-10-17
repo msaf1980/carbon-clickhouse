@@ -75,19 +75,27 @@ func tagQueryString(sb *strings.Builder, days uint16, tableName string) string {
 	return fsb.String()
 }
 
-func (u *Tagged) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, tags map[string]tagRow, days uint16, filename string) error {
+func (u *Tagged) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, tags map[string]tagRow,
+	days uint16, filename string, checks, totalchecks, total int) error {
+
 	logger := zapwriter.Logger("tags")
 	query := tagQueryString(sb, days, u.config.TableName)
-	logger.Debug("cache", zap.String("query", query), zap.String("filename", filename))
+	startTime := time.Now()
 	rows, err := connect.Query(query)
+	endTime := time.Now()
 	if err != nil {
+		logger.Debug("cache", zap.String("query", query), zap.String("filename", filename), zap.Error(err),
+			zap.Duration("query_time", endTime.Sub(startTime)))
 		return err
 	}
+	var found int
+	var keyerror int
 	for rows.Next() {
 		var path string
 		if err := rows.Scan(&path); err != nil {
 			return err
 		}
+		found++
 		key := fmt.Sprintf("%d:%s", days, path)
 		v, ok := tags[key]
 		if ok {
@@ -95,10 +103,15 @@ func (u *Tagged) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, tags map[
 			tags[key] = v
 			//fmt.Println(path)
 		} else {
-			return fmt.Errorf("key '%s' not found during tag lookup, may be wrong filter generated", key)
+			keyerror++
+			err = fmt.Errorf("key '%s' not found during tag lookup, may be wrong filter generated", key)
+			logger.Error("cache", zap.String("query", query), zap.Uint16("days", days), zap.Error(err))
 		}
 	}
-
+	logger.Info("cache", zap.String("filename", filename),
+		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(startTime)),
+		zap.Int("keyerror", keyerror), zap.Int("found", found),
+		zap.Int("checked", checks), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil
 }
 
@@ -116,16 +129,17 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 		return nil, err
 	}
 
-	n := 0
+	var n int
+	var checks int
 	var days uint16
 	var filterSb strings.Builder
 	for _, v := range tags {
-		if n > 5000 || (n > 0 && days != v.days) {
-			err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename)
+		if n >= 50000 || (n > 0 && days != v.days) {
+			checks += n
+			err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename, n, checks, len(tags))
 			if err != nil {
 				return nil, err
 			}
-
 			filterSb.Reset()
 			n = 0
 		}
@@ -137,7 +151,8 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 	}
 
 	if n > 0 {
-		err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename)
+		checks += n
+		err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename, n, checks, len(tags))
 		if err != nil {
 			return nil, err
 		}

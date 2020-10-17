@@ -81,50 +81,52 @@ func checkTreeIndex(indexes map[string]indexRow, path string, days uint16) error
 	return fmt.Errorf("root key '%s' not found during index lookup, may be wrong filter generated", keySearch)
 }
 
-func (u *Index) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, indexes map[string]indexRow, days uint16, treeDays uint16, filename string) error {
+func (u *Index) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, indexes map[string]indexRow,
+	days uint16, treeDays uint16, filename string, checks, totalchecks, total int) error {
+
 	logger := zapwriter.Logger("index")
 	query := indexQueryString(sb, days, treeDays, u.config.TableName)
-	logger.Debug("cache", zap.String("query", query), zap.String("filename", filename))
+	startTime := time.Now()
 	rows, err := connect.Query(query)
+	endTime := time.Now()
 	if err != nil {
+		logger.Error("cache", zap.String("query", query), zap.String("filename", filename), zap.Error(err),
+			zap.Duration("query_time", endTime.Sub(startTime)))
 		return err
 	}
-	var treePath string
+	var found int
+	var keyerror int
 	for rows.Next() {
 		var date time.Time
 		var path string
 		if err := rows.Scan(&date, &path); err != nil {
 			return err
 		}
+		found++
 		d := RowBinary.SlowTimeToDays(date)
-		key := fmt.Sprintf("%d:%s", d, path)
 		if d == treeDays {
-			treePath = path
-		} else {
-			if len(treePath) > 0 && treePath != path {
-				err = checkTreeIndex(indexes, treePath, days)
-				if err != nil {
-					return err
-				}
+			err := checkTreeIndex(indexes, path, days)
+			if err == nil {
+			} else {
+				logger.Error("cache", zap.String("filename", filename), zap.Uint16("days", days), zap.String("error", err.Error()))
 			}
+		} else {
+			key := fmt.Sprintf("%d:%s", d, path)
 			v, ok := indexes[key]
 			if ok {
 				v.found = true
-				if treePath == path && !v.foundTree {
-					v.foundTree = true
-				}
 				indexes[key] = v
 			} else {
-				return fmt.Errorf("key '%s' not found during index lookup, may be wrong filter generated", key)
+				keyerror++
+				err = fmt.Errorf("key '%s' not found during index lookup, may be wrong filter generated", key)
+				logger.Error("cache", zap.String("query", query), zap.Uint16("days", days), zap.Error(err))
 			}
 		}
 	}
-	if len(treePath) > 0 {
-		err = checkTreeIndex(indexes, treePath, days)
-		if err != nil {
-			return err
-		}
-	}
+	logger.Info("cache", zap.String("filename", filename),
+		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(startTime)),
+		zap.Int("keyerror", keyerror), zap.Int("found", found),
+		zap.Int("checked", checks), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil
 }
 
@@ -142,16 +144,17 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 		return nil, err
 	}
 
-	n := 0
+	var n int
+	var checks int
 	var days uint16
 	var filterSb strings.Builder
 	for _, v := range indexes {
-		if n > 5000 || (n > 0 && days != v.days) {
-			err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename)
+		if n >= 50000 || (n > 0 && days != v.days) {
+			checks += n
+			err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename, n, checks, len(indexes))
 			if err != nil {
 				return nil, err
 			}
-
 			filterSb.Reset()
 			n = 0
 		}
@@ -163,7 +166,8 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 	}
 
 	if n > 0 {
-		err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename)
+		checks += n
+		err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename, n, checks, len(indexes))
 		if err != nil {
 			return nil, err
 		}
