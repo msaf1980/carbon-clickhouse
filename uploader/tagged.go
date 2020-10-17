@@ -22,9 +22,6 @@ type Tagged struct {
 var _ Uploader = &Tagged{}
 var _ UploaderWithReset = &Tagged{}
 
-const tagQueryS = "SELECT Path FROM %s WHERE "
-const tagQueryE = " GROUP BY Path"
-
 type tagRow struct {
 	days  uint16
 	name  []byte
@@ -60,26 +57,29 @@ func urlParse(rawurl string) (*url.URL, error) {
 	return m, err
 }
 
-func tagQueryString(sb *strings.Builder, days uint16, tableName string) string {
-	var fsb strings.Builder
-	fsb.WriteString(fmt.Sprintf(tagQueryS, tableName))
+const tagQueryS = "SELECT Path FROM %s WHERE "
+const tagQueryE = " GROUP BY Path"
 
+func tagQueryPrep(sb *strings.Builder, days uint16, tableName string) {
+	sb.Reset()
+	sb.WriteString(fmt.Sprintf(tagQueryS, tableName))
 	t := time.Unix(86400*int64(days), 0)
 	s := fmt.Sprintf("(Date = '%04d-%02d-%02d'", t.Year(), t.Month(), t.Day())
-	fsb.WriteString(s)
-	fsb.WriteString(" AND Path IN (")
-	fsb.WriteString(sb.String())
-	fsb.WriteString("))")
+	sb.WriteString(s)
+	sb.WriteString(" AND Path IN (")
+}
 
-	fsb.WriteString(tagQueryE)
-	return fsb.String()
+func tagQueryEnd(sb *strings.Builder) {
+	sb.WriteString("))")
+	sb.WriteString(tagQueryE)
 }
 
 func (u *Tagged) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, tags map[string]tagRow,
-	days uint16, filename string, checks, totalchecks, total int) error {
+	days uint16, filename string, checks, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("tags")
-	query := tagQueryString(sb, days, u.config.TableName)
+	tagQueryEnd(sb)
+	query := sb.String()
 	startTime := time.Now()
 	rows, err := connect.Query(query)
 	endTime := time.Now()
@@ -109,7 +109,7 @@ func (u *Tagged) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, tags map[
 		}
 	}
 	logger.Info("cache", zap.String("filename", filename),
-		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(startTime)),
+		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(prestartTime)),
 		zap.Int("keyerror", keyerror), zap.Int("found", found),
 		zap.Int("checked", checks), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil
@@ -133,26 +133,33 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 	var checks int
 	var days uint16
 	var filterSb strings.Builder
+	prestartTime := time.Now()
 	for _, v := range tags {
 		if n >= 50000 || (n > 0 && days != v.days) {
 			checks += n
-			err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename, n, checks, len(tags))
+			err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename, n, checks, len(tags), prestartTime)
 			if err != nil {
 				return nil, err
 			}
-			filterSb.Reset()
+			if days != v.days {
+				days = v.days
+			}
+			prestartTime = time.Now()
+			tagQueryPrep(&filterSb, days, u.config.TableName)
 			n = 0
 		}
 		if days != v.days {
 			days = v.days
+			prestartTime = time.Now()
+			tagQueryPrep(&filterSb, days, u.config.TableName)
 		}
-		filterAddPath(&filterSb, unsafeString(v.name))
+		filterQueryAddPath(&filterSb, unsafeString(v.name), n)
 		n++
 	}
 
 	if n > 0 {
 		checks += n
-		err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename, n, checks, len(tags))
+		err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename, n, checks, len(tags), prestartTime)
 		if err != nil {
 			return nil, err
 		}

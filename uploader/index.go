@@ -27,9 +27,6 @@ const ReverseTreeLevelOffset = 30000
 
 const DefaultTreeDate = 42 // 1970-02-12
 
-const indexQueryS = "SELECT Date, Path FROM %s WHERE "
-const indexQueryE = " GROUP BY Path, Date ORDER BY Path, Date ASC"
-
 type indexRow struct {
 	days      uint16
 	name      []byte
@@ -44,28 +41,35 @@ func NewIndex(base *Base) *Index {
 	return u
 }
 
-func filterAddPath(sb *strings.Builder, name string) {
-	if sb.Len() == 0 {
-		sb.WriteString("'" + name + "'")
+func filterQueryAddPath(sb *strings.Builder, name string, n int) {
+	if n == 0 {
+		//sb.WriteString("'" + name + "'")
+		sb.WriteString("'")
 	} else {
-		sb.WriteString(", '" + name + "'")
+		//sb.WriteString(", '" + name + "'")
+		sb.WriteString(", '")
 	}
+	sb.WriteString(name)
+	sb.WriteString("'")
 }
 
-func indexQueryString(sb *strings.Builder, days uint16, treeDays uint16, tableName string) string {
-	var fsb strings.Builder
-	fsb.WriteString(fmt.Sprintf(indexQueryS, tableName))
+const indexQueryS = "SELECT Date, Path FROM %s WHERE "
+const indexQueryE = " GROUP BY Path, Date ORDER BY Path, Date ASC"
+
+func indexQueryPrep(sb *strings.Builder, days uint16, treeDays uint16, tableName string) {
+	sb.Reset()
+	sb.WriteString(fmt.Sprintf(indexQueryS, tableName))
 
 	t := time.Unix(86400*int64(days), 0)
 	treeT := time.Unix(86400*int64(treeDays), 0)
 	s := fmt.Sprintf("(Date IN ('%04d-%02d-%02d', '%04d-%02d-%02d')", treeT.Year(), treeT.Month(), treeT.Day(), t.Year(), t.Month(), t.Day())
-	fsb.WriteString(s)
-	fsb.WriteString(" AND Path IN (")
-	fsb.WriteString(sb.String())
-	fsb.WriteString("))")
+	sb.WriteString(s)
+	sb.WriteString(" AND Path IN (")
+}
 
-	fsb.WriteString(indexQueryE)
-	return fsb.String()
+func indexQueryEnd(sb *strings.Builder) {
+	sb.WriteString("))")
+	sb.WriteString(indexQueryE)
 }
 
 func checkTreeIndex(indexes map[string]indexRow, path string, days uint16) error {
@@ -82,10 +86,11 @@ func checkTreeIndex(indexes map[string]indexRow, path string, days uint16) error
 }
 
 func (u *Index) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, indexes map[string]indexRow,
-	days uint16, treeDays uint16, filename string, checks, totalchecks, total int) error {
+	days uint16, treeDays uint16, filename string, checks, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("index")
-	query := indexQueryString(sb, days, treeDays, u.config.TableName)
+	indexQueryEnd(sb)
+	query := sb.String()
 	startTime := time.Now()
 	rows, err := connect.Query(query)
 	endTime := time.Now()
@@ -124,7 +129,7 @@ func (u *Index) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, indexes ma
 		}
 	}
 	logger.Info("cache", zap.String("filename", filename),
-		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(startTime)),
+		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(prestartTime)),
 		zap.Int("keyerror", keyerror), zap.Int("found", found),
 		zap.Int("checked", checks), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil
@@ -148,26 +153,33 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 	var checks int
 	var days uint16
 	var filterSb strings.Builder
+	prestartTime := time.Now()
 	for _, v := range indexes {
 		if n >= 50000 || (n > 0 && days != v.days) {
 			checks += n
-			err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename, n, checks, len(indexes))
+			err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename, n, checks, len(indexes), prestartTime)
 			if err != nil {
 				return nil, err
 			}
-			filterSb.Reset()
+			if days != v.days {
+				days = v.days
+			}
+			prestartTime = time.Now()
+			indexQueryPrep(&filterSb, days, treeDays, u.config.TableName)
 			n = 0
 		}
 		if days != v.days {
 			days = v.days
+			prestartTime = time.Now()
+			indexQueryPrep(&filterSb, days, treeDays, u.config.TableName)
 		}
-		filterAddPath(&filterSb, unsafeString(v.name))
+		filterQueryAddPath(&filterSb, unsafeString(v.name), n)
 		n++
 	}
 
 	if n > 0 {
 		checks += n
-		err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename, n, checks, len(indexes))
+		err = u.cacheQueryCheck(connect, &filterSb, indexes, days, treeDays, filename, n, checks, len(indexes), prestartTime)
 		if err != nil {
 			return nil, err
 		}
