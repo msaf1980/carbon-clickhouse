@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
 	"github.com/lomik/zapwriter"
+	"github.com/msaf1980/stringutils"
 	"go.uber.org/zap"
 )
 
@@ -28,11 +30,15 @@ type tagRow struct {
 	found bool
 }
 
+const tagCacheBatchSize = 50000
+const tagQuery = "SELECT Path FROM %s WHERE Date = ? AND Path IN (?) GROUP BY Path"
+
 func NewTagged(base *Base) *Tagged {
 	u := &Tagged{}
 	u.cached = newCached(base)
 	u.cached.parser = u.parseFile
-	u.query = fmt.Sprintf("%s (Date, Tag1, Path, Tags, Version)", u.config.TableName)
+	//u.query = fmt.Sprintf("%s (Date, Tag1, Path, Tags, Version)", u.config.TableName)
+	u.query = fmt.Sprintf(tagQuery, u.config.TableName)
 
 	u.ignoredMetrics = make(map[string]bool, len(u.config.IgnoredTaggedMetrics))
 	for _, metric := range u.config.IgnoredTaggedMetrics {
@@ -57,34 +63,16 @@ func urlParse(rawurl string) (*url.URL, error) {
 	return m, err
 }
 
-const tagQueryS = "SELECT Path FROM %s WHERE "
-const tagQueryE = " GROUP BY Path"
-
-func tagQueryPrep(sb *strings.Builder, days uint16, tableName string) {
-	sb.Reset()
-	sb.WriteString(fmt.Sprintf(tagQueryS, tableName))
-	t := time.Unix(86400*int64(days), 0)
-	s := fmt.Sprintf("(Date = '%04d-%02d-%02d'", t.Year(), t.Month(), t.Day())
-	sb.WriteString(s)
-	sb.WriteString(" AND Path IN (")
-}
-
-func tagQueryEnd(sb *strings.Builder) {
-	sb.WriteString("))")
-	sb.WriteString(tagQueryE)
-}
-
-func (u *Tagged) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, tags map[string]tagRow,
+func (u *Tagged) cacheQueryCheck(connect *sql.DB, filterSb *stringutils.Builder, tags map[string]tagRow,
 	days uint16, filename string, checks, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("tags")
-	tagQueryEnd(sb)
-	query := sb.String()
 	startTime := time.Now()
-	rows, err := connect.Query(query)
+	date := daysToDate(days).Format("2006-01-02")
+	rows, err := connect.Query(u.query, date, filterSb.String())
 	endTime := time.Now()
 	if err != nil {
-		logger.Debug("cache", zap.String("query", query), zap.String("filename", filename), zap.Error(err),
+		logger.Debug("cache", zap.String("paths", filterSb.String()), zap.String("date", date), zap.String("filename", filename), zap.Error(err),
 			zap.Duration("query_time", endTime.Sub(startTime)))
 		return err
 	}
@@ -96,16 +84,19 @@ func (u *Tagged) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, tags map[
 			return err
 		}
 		found++
-		key := fmt.Sprintf("%d:%s", days, path)
+		key := strconv.Itoa(int(days)) + ":" + path
 		v, ok := tags[key]
 		if ok {
 			v.found = true
+			if v.found {
+				u.cached.existsCache.Add(key, startTime.Unix())
+			}
 			tags[key] = v
 			//fmt.Println(path)
 		} else {
 			keyerror++
 			err = fmt.Errorf("key '%s' not found during tag lookup, may be wrong filter generated", key)
-			logger.Error("cache", zap.String("query", query), zap.Uint16("days", days), zap.Error(err))
+			logger.Error("cache", zap.String("date", date), zap.Error(err))
 		}
 	}
 	logger.Info("cache", zap.String("filename", filename),
@@ -115,7 +106,7 @@ func (u *Tagged) cacheQueryCheck(connect *sql.DB, sb *strings.Builder, tags map[
 	return nil
 }
 
-func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map[string]bool, error) {
+func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string, filterSb *stringutils.Builder) (map[string]bool, error) {
 	newTags := make(map[string]bool)
 	if len(tags) == 0 {
 		return newTags, nil
@@ -132,12 +123,13 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 	var n int
 	var checks int
 	var days uint16
-	var filterSb strings.Builder
 	prestartTime := time.Now()
+	filterSb.Reset()
 	for _, v := range tags {
 		if n >= 50000 || (n > 0 && days != v.days) {
 			checks += n
-			err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename, n, checks, len(tags), prestartTime)
+			err = u.cacheQueryCheck(connect, filterSb, tags, days, filename, n, checks, len(tags), prestartTime)
+			filterSb.Reset()
 			if err != nil {
 				return nil, err
 			}
@@ -145,30 +137,29 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 				days = v.days
 			}
 			prestartTime = time.Now()
-			tagQueryPrep(&filterSb, days, u.config.TableName)
 			n = 0
 		}
 		if days != v.days {
 			days = v.days
 			prestartTime = time.Now()
-			tagQueryPrep(&filterSb, days, u.config.TableName)
 		}
-		filterQueryAddPath(&filterSb, unsafeString(v.name), n)
+		filterQueryAddPath(filterSb, unsafeString(v.name), n)
 		n++
 	}
 
 	if n > 0 {
 		checks += n
-		err = u.cacheQueryCheck(connect, &filterSb, tags, days, filename, n, checks, len(tags), prestartTime)
+		err = u.cacheQueryCheck(connect, filterSb, tags, days, filename, n, checks, len(tags), prestartTime)
 		if err != nil {
 			return nil, err
 		}
-
 		filterSb.Reset()
 	}
 
-	for key, _ := range tags {
-		newTags[key] = true
+	for key, v := range tags {
+		if !v.found {
+			newTags[key] = true
+		}
 	}
 	return newTags, nil
 }
@@ -179,6 +170,9 @@ func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, uint64, uint
 	var n uint64
 	var skipped uint64
 	var skippedTree uint64
+
+	logger := zapwriter.Logger("index")
+	startTime := time.Now()
 
 	reader, err = RowBinary.NewReader(filename, false)
 	if err != nil {
@@ -209,7 +203,8 @@ LineLoop:
 			continue
 		}
 
-		key := fmt.Sprintf("%d:%s", reader.Days(), unsafeString(name))
+		//key := fmt.Sprintf("%d:%s", reader.Days(), unsafeString(name))
+		key := strconv.Itoa(int(reader.Days())) + ":" + unsafeString(name)
 
 		if u.existsCache.Exists(key) {
 			continue LineLoop
@@ -225,7 +220,17 @@ LineLoop:
 		}
 	}
 
-	newTagged, err := u.cacheBatchRecheck(nocacheSeries, filename)
+	var filterSb stringutils.Builder
+	if len(nocacheSeries) > 0 {
+		size := tagCacheBatchSize * 200
+		if len(nocacheSeries) < tagCacheBatchSize {
+			size = len(nocacheSeries) * 200
+		}
+		if size > filterSb.Cap() {
+			filterSb.Grow(size)
+		}
+	}
+	newTagged, err := u.cacheBatchRecheck(nocacheSeries, filename, &filterSb)
 	if err != nil {
 		return n, skipped, skippedTree, nil, err
 	}
@@ -246,7 +251,7 @@ LineLoop:
 			continue
 		}
 
-		t := fmt.Sprintf("__name__=%s", m.Path)
+		t := "__name__=" + m.Path
 		tag1 = append(tag1, t)
 		tagsBuf.WriteString(t)
 
@@ -255,7 +260,7 @@ LineLoop:
 		ignoreAllButName := u.ignoredMetrics[m.Path] || u.ignoredMetrics["*"]
 		tagsWritten := 1
 		for k, vl := range m.Query() {
-			t := fmt.Sprintf("%s=%s", k, vl[0])
+			t := k + "=" + vl[0]
 			tagsBuf.WriteString(t)
 			tagsWritten++
 
@@ -278,6 +283,10 @@ LineLoop:
 			return n, skipped, skippedTree, nil, err
 		}
 	}
+
+	logger.Info("cache", zap.String("filename", filename),
+		zap.Duration("time", time.Since(startTime)),
+		zap.Uint64("cachemiss", n), zap.Uint64("cachehit", uint64(len(nocacheSeries))-n))
 
 	return n, skipped, skippedTree, newTagged, nil
 }
