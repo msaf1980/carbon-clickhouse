@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
 	"github.com/lomik/zapwriter"
 	"github.com/msaf1980/stringutils"
@@ -26,12 +28,13 @@ var _ UploaderWithReset = &Tagged{}
 
 type tagRow struct {
 	days  uint16
-	name  []byte
+	tags  *url.URL
+	path  string
 	found bool
 }
 
 const tagCacheBatchSize = 50000
-const tagQuery = "SELECT Path FROM %s WHERE Date = ? AND Path IN (?) GROUP BY Path"
+const tagQuery = "SELECT Path FROM %s WHERE Date = ? AND Tag1 IN (?) AND Path IN (?) GROUP BY Path"
 
 func NewTagged(base *Base) *Tagged {
 	u := &Tagged{}
@@ -63,13 +66,43 @@ func urlParse(rawurl string) (*url.URL, error) {
 	return m, err
 }
 
-func (u *Tagged) cacheQueryCheck(connect *sql.DB, filterSb *stringutils.Builder, tags map[string]tagRow,
-	days uint16, filename string, checks, totalchecks, total int, prestartTime time.Time) error {
+func filterQueryAddTagNames(sb *stringutils.Builder, names map[string]bool) {
+	first := true
+	for name := range names {
+		if first {
+			first = false
+			//sb.WriteString("'" + name + "'")
+			sb.WriteString("'")
+		} else {
+			//sb.WriteString(", '" + name + "'")
+			sb.WriteString(", '")
+		}
+		sb.WriteString(name)
+		sb.WriteString("'")
+
+	}
+}
+
+func (u *Tagged) cacheQueryCheck(connect *sql.DB, namesMap map[string]bool, paths []string, tags map[string]tagRow,
+	days uint16, filename string, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("tags")
 	startTime := time.Now()
 	date := daysToDate(days).Format("2006-01-02")
-	rows, err := connect.Query(u.cacheQuery, date, filterSb.String())
+	names := make([]string, len(namesMap))
+	n := 0
+	for name := range namesMap {
+		names[n] = name
+		n++
+	}
+	query, args, err := sqlx.In(u.cacheQuery, date, names, paths)
+	if err != nil {
+		logger.Error("cache", zap.String("date", date),
+			zap.String("filename", filename), zap.Error(err),
+			zap.Duration("query_time", time.Now().Sub(startTime)))
+		return err
+	}
+	rows, err := connect.Query(query, args...)
 	endTime := time.Now()
 	if err != nil {
 		logger.Debug("cache", zap.String("date", date), zap.String("filename", filename), zap.Error(err),
@@ -102,11 +135,11 @@ func (u *Tagged) cacheQueryCheck(connect *sql.DB, filterSb *stringutils.Builder,
 	logger.Info("cache", zap.String("filename", filename),
 		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(prestartTime)),
 		zap.Int("keyerror", keyerror), zap.Int("found", found),
-		zap.Int("checked", checks), zap.Int("processed", totalchecks), zap.Int("total", total))
+		zap.Int("checked", len(paths)), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil
 }
 
-func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string, filterSb *stringutils.Builder) (map[string]bool, error) {
+func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map[string]bool, error) {
 	newTags := make(map[string]bool)
 	if len(tags) == 0 {
 		return newTags, nil
@@ -124,12 +157,27 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string, filt
 	var checks int
 	var days uint16
 	prestartTime := time.Now()
-	filterSb.Reset()
+	paths := make([]string, tagCacheBatchSize)
+	names := make(map[string]bool)
+	var namesSb stringutils.Builder
+	namesSb.Grow(tagCacheBatchSize)
+	tagsSorted := make([]tagRow, len(tags))
 	for _, v := range tags {
-		if n >= 50000 || (n > 0 && days != v.days) {
+		tagsSorted[n] = v
+		n++
+	}
+	sort.Slice(tagsSorted, func(i, j int) bool {
+		if tagsSorted[i].days == tagsSorted[j].days {
+			return tagsSorted[i].path < tagsSorted[j].path
+		}
+		return tagsSorted[i].days < tagsSorted[j].days
+	})
+	n = 0
+	for _, v := range tagsSorted {
+		if n >= tagCacheBatchSize || (n > 0 && days != v.days) {
 			checks += n
-			err = u.cacheQueryCheck(connect, filterSb, tags, days, filename, n, checks, len(tags), prestartTime)
-			filterSb.Reset()
+			err = u.cacheQueryCheck(connect, names, paths[0:n], tags, days, filename, checks, len(tags), prestartTime)
+			names = make(map[string]bool)
 			if err != nil {
 				return nil, err
 			}
@@ -143,17 +191,19 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string, filt
 			days = v.days
 			prestartTime = time.Now()
 		}
-		filterQueryAddPath(filterSb, unsafeString(v.name), n)
+		paths[n] = v.path
+		if _, ok := names[v.tags.Path]; !ok {
+			names[string(v.tags.Path)] = true
+		}
 		n++
 	}
 
 	if n > 0 {
 		checks += n
-		err = u.cacheQueryCheck(connect, filterSb, tags, days, filename, n, checks, len(tags), prestartTime)
+		err = u.cacheQueryCheck(connect, names, paths[0:n], tags, days, filename, checks, len(tags), prestartTime)
 		if err != nil {
 			return nil, err
 		}
-		filterSb.Reset()
 	}
 
 	for key, v := range tags {
@@ -205,7 +255,8 @@ LineLoop:
 		}
 
 		//key := fmt.Sprintf("%d:%s", reader.Days(), unsafeString(name))
-		key := strconv.Itoa(int(reader.Days())) + ":" + unsafeString(name)
+		sname := unsafeString(name)
+		key := strconv.Itoa(int(reader.Days())) + ":" + sname
 
 		if u.existsCache.Exists(key) {
 			continue LineLoop
@@ -215,23 +266,20 @@ LineLoop:
 			continue LineLoop
 		}
 
+		sname = string(name)
+		tags, err := urlParse(sname)
+		if err != nil {
+			continue
+		}
+		tags.Path = "__name__=" + tags.Path
 		nocacheSeries[key] = tagRow{
 			days: reader.Days(),
-			name: []byte(string(name)),
+			path: sname,
+			tags: tags,
 		}
 	}
 
-	var filterSb stringutils.Builder
-	if len(nocacheSeries) > 0 {
-		size := tagCacheBatchSize * 200
-		if len(nocacheSeries) < tagCacheBatchSize {
-			size = len(nocacheSeries) * 200
-		}
-		if size > filterSb.Cap() {
-			filterSb.Grow(size)
-		}
-	}
-	newTagged, err := u.cacheBatchRecheck(nocacheSeries, filename, &filterSb)
+	newTagged, err := u.cacheBatchRecheck(nocacheSeries, filename)
 	if err != nil {
 		return n, skipped, skippedTree, nil, err
 	}
@@ -241,6 +289,9 @@ LineLoop:
 		if v.found {
 			skipped++
 			continue
+		} else if first {
+			outNotify <- true
+			first = false
 		}
 		n++
 
@@ -248,23 +299,15 @@ LineLoop:
 		tagsBuf.Reset()
 		tag1 = tag1[:0]
 
-		m, err := urlParse(unsafeString(v.name))
-		if err != nil {
-			continue
-		} else if first {
-			outNotify <- true
-			first = false
-		}
-
-		t := "__name__=" + m.Path
+		t := v.tags.Path
 		tag1 = append(tag1, t)
 		tagsBuf.WriteString(t)
 
 		// don't upload any other tag but __name__
 		// if either main metric (m.Path) or each metric (*) is ignored
-		ignoreAllButName := u.ignoredMetrics[m.Path] || u.ignoredMetrics["*"]
+		ignoreAllButName := u.ignoredMetrics[v.tags.Path] || u.ignoredMetrics["*"]
 		tagsWritten := 1
-		for k, vl := range m.Query() {
+		for k, vl := range v.tags.Query() {
 			t := k + "=" + vl[0]
 			tagsBuf.WriteString(t)
 			tagsWritten++
@@ -277,7 +320,7 @@ LineLoop:
 		for i := 0; i < len(tag1); i++ {
 			wb.WriteUint16(v.days)
 			wb.WriteString(tag1[i])
-			wb.WriteBytes(v.name)
+			wb.WriteBytes(stringutils.UnsafeStringBytes(&v.path))
 			wb.WriteUVarint(uint64(tagsWritten))
 			wb.Write(tagsBuf.Bytes())
 			wb.WriteUint32(version)

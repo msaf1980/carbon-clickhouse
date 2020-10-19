@@ -2,14 +2,15 @@ package uploader
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"io"
 	"strconv"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
 	"github.com/lomik/zapwriter"
-	"github.com/mailru/dbr"
 	_ "github.com/mailru/go-clickhouse"
 	"github.com/msaf1980/stringutils"
 	"go.uber.org/zap"
@@ -30,12 +31,13 @@ const DefaultTreeDate = 42 // 1970-02-12
 
 type indexRow struct {
 	days      uint16
-	name      []byte
+	path      []byte
 	found     bool
 	foundTree bool
 }
 
 const indexCacheBatchSize = 50000
+
 const indexQuery = "SELECT Path, groupUniqArray(Date) as Dates FROM %s WHERE Date IN (?) AND Path IN (?) GROUP BY Path"
 
 func NewIndex(base *Base) *Index {
@@ -46,7 +48,7 @@ func NewIndex(base *Base) *Index {
 	return u
 }
 
-func filterQueryAddPath(sb *stringutils.Builder, name string, n int) {
+func filterQueryAddPath(sb *stringutils.Builder, path string, n int) {
 	if n == 0 {
 		//sb.WriteString("'" + name + "'")
 		sb.WriteString("'")
@@ -54,24 +56,45 @@ func filterQueryAddPath(sb *stringutils.Builder, name string, n int) {
 		//sb.WriteString(", '" + name + "'")
 		sb.WriteString(", '")
 	}
-	sb.WriteString(name)
+	sb.WriteString(path)
 	sb.WriteString("'")
+}
+
+func filterQueryAddPaths(sb *stringutils.Builder, paths []string) {
+	for n, path := range paths {
+		if n == 0 {
+			//sb.WriteString("'" + name + "'")
+			sb.WriteString("'")
+		} else {
+			//sb.WriteString(", '" + name + "'")
+			sb.WriteString(", '")
+		}
+		sb.WriteString(path)
+		sb.WriteString("'")
+	}
 }
 
 func daysToDate(days uint16) time.Time {
 	return time.Unix(86400*int64(days), 0)
 }
 
-func (u *Index) cacheQueryCheck(connect *dbr.Connection, filterSb *stringutils.Builder, indexes map[string]indexRow,
-	days uint16, treeDays uint16, filename string, checks, totalchecks, total int, prestartTime time.Time) error {
+func (u *Index) cacheQueryCheck(connect *sql.DB, paths []string, indexes map[string]indexRow,
+	days uint16, treeDays uint16, filename string, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("index")
 	startTime := time.Now()
-	dates := "'" + daysToDate(days).Format("2006-01-02") + "', '" + daysToDate(treeDays).Format("2006-01-02") + "'"
-	rows, err := connect.Query(u.cacheQuery, days, filterSb.String())
+	dates := []string{daysToDate(days).Format("2006-01-02"), daysToDate(treeDays).Format("2006-01-02")}
+	query, args, err := sqlx.In(u.cacheQuery, dates, paths)
+	if err != nil {
+		logger.Error("cache", zap.Strings("date", dates),
+			zap.String("filename", filename), zap.Error(err),
+			zap.Duration("query_time", time.Now().Sub(startTime)))
+		return err
+	}
+	rows, err := connect.Query(query, args...)
 	endTime := time.Now()
 	if err != nil {
-		logger.Error("cache", zap.String("date", dates),
+		logger.Error("cache", zap.Strings("date", dates),
 			zap.String("filename", filename), zap.Error(err),
 			zap.Duration("query_time", endTime.Sub(startTime)))
 		return err
@@ -82,17 +105,19 @@ func (u *Index) cacheQueryCheck(connect *dbr.Connection, filterSb *stringutils.B
 		var path string
 		var sDates []time.Time
 		if err = rows.Scan(&path, &sDates); err != nil {
-			return err
+			if err != nil {
+				return err
+			}
 		}
-		found++
 		key := strconv.Itoa(int(days)) + ":" + path
 		v, ok := indexes[key]
 		if !ok {
 			keyerror++
 			err = fmt.Errorf("key '%s' not found during index lookup, may be wrong filter generated", key)
-			logger.Error("cache", zap.String("date", dates), zap.Error(err))
+			logger.Error("cache", zap.String("date", dates[0]), zap.Error(err))
 			continue
 		}
+		found++
 		for _, dd := range sDates {
 			d := RowBinary.SlowTimeToDays(dd)
 			if d == days {
@@ -111,17 +136,17 @@ func (u *Index) cacheQueryCheck(connect *dbr.Connection, filterSb *stringutils.B
 	logger.Info("cache", zap.String("filename", filename),
 		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(prestartTime)),
 		zap.Int("keyerror", keyerror), zap.Int("found", found),
-		zap.Int("checked", checks), zap.Int("processed", totalchecks), zap.Int("total", total))
+		zap.Int("checked", len(paths)), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil
 }
 
-func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, filename string, filterSb *stringutils.Builder) (map[string]bool, error) {
+func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, filename string) (map[string]bool, error) {
 	newSeries := make(map[string]bool)
 	if len(indexes) == 0 {
 		return newSeries, nil
 	}
 
-	connect, err := dbr.Open("clickhouse", u.config.URL, nil)
+	connect, err := sql.Open("clickhouse", u.config.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +155,11 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 	var checks int
 	var days uint16
 	prestartTime := time.Now()
-	filterSb.Reset()
+	paths := make([]string, tagCacheBatchSize)
 	for _, v := range indexes {
 		if n >= indexCacheBatchSize || (n > 0 && days != v.days) {
 			checks += n
-			err = u.cacheQueryCheck(connect, filterSb, indexes, days, treeDays, filename, n, checks, len(indexes), prestartTime)
-			filterSb.Reset()
+			err = u.cacheQueryCheck(connect, paths[0:n], indexes, days, treeDays, filename, checks, len(indexes), prestartTime)
 			if err != nil {
 				return nil, err
 			}
@@ -149,13 +173,13 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 			days = v.days
 			prestartTime = time.Now()
 		}
-		filterQueryAddPath(filterSb, unsafeString(v.name), n)
+		paths[n] = unsafeString(v.path)
 		n++
 	}
 
 	if n > 0 {
 		checks += n
-		err = u.cacheQueryCheck(connect, filterSb, indexes, days, treeDays, filename, n, checks, len(indexes), prestartTime)
+		err = u.cacheQueryCheck(connect, paths[0:n], indexes, days, treeDays, filename, checks, len(indexes), prestartTime)
 		if err != nil {
 			return nil, err
 		}
@@ -224,21 +248,11 @@ LineLoop:
 
 		nocacheSeries[key] = indexRow{
 			days: reader.Days(),
-			name: []byte(string(name)),
+			path: []byte(string(name)),
 		}
 	}
 
-	var filterSb stringutils.Builder
-	if len(nocacheSeries) > 0 {
-		size := indexCacheBatchSize * 200
-		if len(nocacheSeries) < indexCacheBatchSize {
-			size = len(nocacheSeries) * 200
-		}
-		if size > filterSb.Cap() {
-			filterSb.Grow(size)
-		}
-	}
-	newSeries, err := u.cacheBatchRecheck(nocacheSeries, treeDate, filename, &filterSb)
+	newSeries, err := u.cacheBatchRecheck(nocacheSeries, treeDate, filename)
 	if err != nil {
 		return n, skipped, skippedTree, nil, err
 	}
@@ -257,13 +271,13 @@ LineLoop:
 
 		wb.Reset()
 
-		reverseName := RowBinary.ReverseBytes(v.name)
+		reverseName := RowBinary.ReverseBytes(v.path)
 		if !v.found {
-			level = pathLevel(v.name)
+			level = pathLevel(v.path)
 			// Direct path with date
 			wb.WriteUint16(v.days)
 			wb.WriteUint32(uint32(level))
-			wb.WriteBytes(v.name)
+			wb.WriteBytes(v.path)
 			wb.WriteUint32(version)
 
 			// Reverse path with date
@@ -279,10 +293,10 @@ LineLoop:
 			// Tree
 			wb.WriteUint16(treeDate)
 			wb.WriteUint32(uint32(level + TreeLevelOffset))
-			wb.WriteBytes(v.name)
+			wb.WriteBytes(v.path)
 			wb.WriteUint32(version)
 
-			p = v.name
+			p = v.path
 			l = level
 			for l--; l > 0; l-- {
 				index = bytes.LastIndexByte(p, '.')

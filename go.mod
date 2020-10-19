@@ -10,12 +10,12 @@ require (
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b // indirect
 	github.com/golang/protobuf v1.0.0
 	github.com/golang/snappy v0.0.0-20170215233205-553a64147049
+	github.com/jmoiron/sqlx v1.2.0
 	github.com/lib/pq v1.8.0 // indirect
 	github.com/lomik/graphite-pickle v0.0.0-20171221213606-614e8df42119
 	github.com/lomik/og-rek v0.0.0-20170411191824-628eefeb8d80 // indirect
 	github.com/lomik/stop v0.0.0-20161127103810-188e98d969bd // indirect
 	github.com/lomik/zapwriter v0.0.0-20170315193840-d4499a33b592
-	github.com/mailru/dbr v3.0.0+incompatible
 	github.com/mailru/go-clickhouse v1.3.0
 	github.com/mattn/go-sqlite3 v1.14.4 // indirect
 	github.com/msaf1980/stringutils v0.0.1
@@ -30,5 +30,4 @@ require (
 	golang.org/x/text v0.3.1-0.20171227012246-e19ae1496984 // indirect
 	google.golang.org/genproto v0.0.0-20180206005123-2b5a72b8730b // indirect
 	google.golang.org/grpc v1.9.2
-	gopkg.in/DATA-DOG/go-sqlmock.v1 v1.3.0 // indirect
 )
