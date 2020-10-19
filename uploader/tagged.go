@@ -37,8 +37,8 @@ func NewTagged(base *Base) *Tagged {
 	u := &Tagged{}
 	u.cached = newCached(base)
 	u.cached.parser = u.parseFile
-	//u.query = fmt.Sprintf("%s (Date, Tag1, Path, Tags, Version)", u.config.TableName)
-	u.query = fmt.Sprintf(tagQuery, u.config.TableName)
+	u.query = fmt.Sprintf("%s (Date, Tag1, Path, Tags, Version)", u.config.TableName)
+	u.cacheQuery = fmt.Sprintf(tagQuery, u.config.TableName)
 
 	u.ignoredMetrics = make(map[string]bool, len(u.config.IgnoredTaggedMetrics))
 	for _, metric := range u.config.IgnoredTaggedMetrics {
@@ -69,10 +69,10 @@ func (u *Tagged) cacheQueryCheck(connect *sql.DB, filterSb *stringutils.Builder,
 	logger := zapwriter.Logger("tags")
 	startTime := time.Now()
 	date := daysToDate(days).Format("2006-01-02")
-	rows, err := connect.Query(u.query, date, filterSb.String())
+	rows, err := connect.Query(u.cacheQuery, date, filterSb.String())
 	endTime := time.Now()
 	if err != nil {
-		logger.Debug("cache", zap.String("paths", filterSb.String()), zap.String("date", date), zap.String("filename", filename), zap.Error(err),
+		logger.Debug("cache", zap.String("date", date), zap.String("filename", filename), zap.Error(err),
 			zap.Duration("query_time", endTime.Sub(startTime)))
 		return err
 	}
@@ -164,7 +164,7 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string, filt
 	return newTags, nil
 }
 
-func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
+func (u *Tagged) parseFile(filename string, out io.Writer, outNotify chan bool) (uint64, uint64, uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
 	var n uint64
@@ -174,6 +174,7 @@ func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, uint64, uint
 	logger := zapwriter.Logger("index")
 	startTime := time.Now()
 
+	defer func() { outNotify <- true }()
 	reader, err = RowBinary.NewReader(filename, false)
 	if err != nil {
 		return n, skipped, skippedTree, nil, err
@@ -235,6 +236,7 @@ LineLoop:
 		return n, skipped, skippedTree, nil, err
 	}
 
+	first := true
 	for _, v := range nocacheSeries {
 		if v.found {
 			skipped++
@@ -249,6 +251,9 @@ LineLoop:
 		m, err := urlParse(unsafeString(v.name))
 		if err != nil {
 			continue
+		} else if first {
+			outNotify <- true
+			first = false
 		}
 
 		t := "__name__=" + m.Path

@@ -28,11 +28,12 @@ func NewTree(base *Base) *Tree {
 	return u
 }
 
-func (u *Tree) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
+func (u *Tree) parseFile(filename string, out io.Writer, outNotify chan bool) (uint64, uint64, uint64, map[string]bool, error) {
 	var n uint64
 	var skipped uint64
 	var skippedTree uint64
 
+	defer func() { outNotify <- false }()
 	reader, err := RowBinary.NewReader(filename, false)
 	if err != nil {
 		return n, skipped, skippedTree, nil, err
@@ -69,6 +70,7 @@ func (u *Tree) parseFile(filename string, out io.Writer) (uint64, uint64, uint64
 		return nil
 	}
 
+	outNotify <- true
 LineLoop:
 	for {
 		name, err := reader.ReadRecord()

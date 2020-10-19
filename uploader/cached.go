@@ -18,8 +18,9 @@ type DebugCacheDumper interface {
 type cached struct {
 	*Base
 	existsCache CMap // store known keys and don't load it to clickhouse tree
-	parser      func(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error)
+	parser      func(filename string, out io.Writer, outNotify chan bool) (uint64, uint64, uint64, map[string]bool, error)
 	expired     uint32 // atomic counter
+	cacheQuery  string
 }
 
 func newCached(base *Base) *cached {
@@ -71,11 +72,13 @@ func (u *cached) upload(ctx context.Context, logger *zap.Logger, filename string
 	startTime := time.Now()
 
 	uploadResult := make(chan error, 1)
+	hasRead := make(chan bool, 2)
 
 	u.Go(func(ctx context.Context) {
 		err = u.insertRowBinary(
 			u.query,
 			pipeReader,
+			hasRead,
 		)
 		uploadResult <- err
 		if err != nil {
@@ -83,7 +86,7 @@ func (u *cached) upload(ctx context.Context, logger *zap.Logger, filename string
 		}
 	})
 
-	n, skipped, skippedTree, newSeries, err = u.parser(filename, writer)
+	n, skipped, skippedTree, newSeries, err = u.parser(filename, writer, hasRead)
 	if err == nil {
 		err = writer.Flush()
 	}

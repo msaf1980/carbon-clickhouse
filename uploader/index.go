@@ -42,7 +42,7 @@ func NewIndex(base *Base) *Index {
 	u := &Index{}
 	u.cached = newCached(base)
 	u.cached.parser = u.parseFile
-	u.query = fmt.Sprintf(indexQuery, u.config.TableName)
+	u.cacheQuery = fmt.Sprintf(indexQuery, u.config.TableName)
 	return u
 }
 
@@ -67,11 +67,11 @@ func (u *Index) cacheQueryCheck(connect *dbr.Connection, filterSb *stringutils.B
 
 	logger := zapwriter.Logger("index")
 	startTime := time.Now()
-	dates := []string{daysToDate(days).Format("2006-01-02"), daysToDate(treeDays).Format("2006-01-02")}
-	rows, err := connect.Query(u.query, days, filterSb.String())
+	dates := "'" + daysToDate(days).Format("2006-01-02") + "', '" + daysToDate(treeDays).Format("2006-01-02") + "'"
+	rows, err := connect.Query(u.cacheQuery, days, filterSb.String())
 	endTime := time.Now()
 	if err != nil {
-		logger.Error("cache", zap.String("paths", filterSb.String()), zap.Strings("date", dates),
+		logger.Error("cache", zap.String("date", dates),
 			zap.String("filename", filename), zap.Error(err),
 			zap.Duration("query_time", endTime.Sub(startTime)))
 		return err
@@ -90,7 +90,7 @@ func (u *Index) cacheQueryCheck(connect *dbr.Connection, filterSb *stringutils.B
 		if !ok {
 			keyerror++
 			err = fmt.Errorf("key '%s' not found during index lookup, may be wrong filter generated", key)
-			logger.Error("cache", zap.String("date", dates[0]), zap.Error(err))
+			logger.Error("cache", zap.String("date", dates), zap.Error(err))
 			continue
 		}
 		for _, dd := range sDates {
@@ -169,7 +169,7 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 	return newSeries, nil
 }
 
-func (u *Index) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
+func (u *Index) parseFile(filename string, out io.Writer, outNotify chan bool) (uint64, uint64, uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
 	var n uint64
@@ -179,6 +179,7 @@ func (u *Index) parseFile(filename string, out io.Writer) (uint64, uint64, uint6
 	logger := zapwriter.Logger("index")
 	startTime := time.Now()
 
+	defer func() { outNotify <- true }()
 	reader, err = RowBinary.NewReader(filename, false)
 	if err != nil {
 		return n, skipped, skippedTree, nil, err
@@ -242,30 +243,35 @@ LineLoop:
 		return n, skipped, skippedTree, nil, err
 	}
 
+	first := true
 	for _, v := range nocacheSeries {
-		if v.found {
+		if v.found && v.foundTree {
 			skipped++
 			skippedTree++
 			continue
+		} else if first {
+			outNotify <- true
+			first = false
 		}
 		n++
 
 		wb.Reset()
 
-		level = pathLevel(v.name)
-		// Direct path with date
-		wb.WriteUint16(v.days)
-		wb.WriteUint32(uint32(level))
-		wb.WriteBytes(v.name)
-		wb.WriteUint32(version)
-
 		reverseName := RowBinary.ReverseBytes(v.name)
+		if !v.found {
+			level = pathLevel(v.name)
+			// Direct path with date
+			wb.WriteUint16(v.days)
+			wb.WriteUint32(uint32(level))
+			wb.WriteBytes(v.name)
+			wb.WriteUint32(version)
 
-		// Reverse path with date
-		wb.WriteUint16(v.days)
-		wb.WriteUint32(uint32(level + ReverseLevelOffset))
-		wb.WriteBytes(reverseName)
-		wb.WriteUint32(version)
+			// Reverse path with date
+			wb.WriteUint16(v.days)
+			wb.WriteUint32(uint32(level + ReverseLevelOffset))
+			wb.WriteBytes(reverseName)
+			wb.WriteUint32(version)
+		}
 
 		if v.foundTree {
 			skippedTree++
@@ -306,7 +312,6 @@ LineLoop:
 			return n, skipped, skippedTree, nil, err
 		}
 	}
-
 	wb.Release()
 
 	logger.Info("cache", zap.String("filename", filename),

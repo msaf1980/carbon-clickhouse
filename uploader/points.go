@@ -84,11 +84,13 @@ func (u *Points) upload(ctx context.Context, logger *zap.Logger, filename string
 	pipeReader, pipeWriter := io.Pipe()
 	out := bufio.NewWriter(pipeWriter)
 	uploadResult = make(chan error, 1)
+	hasRead := make(chan bool, 2)
 
 	u.Go(func(ctx context.Context) {
 		err := u.insertRowBinary(
 			u.query,
 			pipeReader,
+			hasRead,
 		)
 		uploadResult <- err
 		if err != nil {
