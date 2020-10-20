@@ -32,9 +32,10 @@ func NewPoints(base *Base, reverse bool) *Points {
 }
 
 // parseAndFilter reads points data and excludes those ones which match blacklist
-func (u *Points) parseAndFilter(filename string, out io.Writer) (uint64, uint64, uint64, error) {
+func (u *Points) parseAndFilter(filename string, out io.Writer, outNotify chan bool) (uint64, uint64, uint64, error) {
 	var n uint64
 
+	defer func() { outNotify <- false }()
 	reader, err := RowBinary.NewReader(filename, u.reverse)
 	if err != nil {
 		return n, 0, 0, err
@@ -46,6 +47,7 @@ func (u *Points) parseAndFilter(filename string, out io.Writer) (uint64, uint64,
 	wb := RowBinary.GetWriteBuffer()
 	defer wb.Release()
 
+	outNotify <- true
 	for {
 		name, err := reader.ReadRecord()
 		if err != nil { // io.EOF or corrupted file
@@ -98,7 +100,7 @@ func (u *Points) upload(ctx context.Context, logger *zap.Logger, filename string
 		}
 	})
 
-	n, skipped, skippedTree, err = u.parseAndFilter(filename, out)
+	n, skipped, skippedTree, err = u.parseAndFilter(filename, out, hasRead)
 	if err == nil {
 		err = out.Flush()
 	}
