@@ -28,8 +28,9 @@ var _ UploaderWithReset = &Tagged{}
 
 type tagRow struct {
 	days  uint16
-	tags  *url.URL
 	path  string
+	name  string
+	tags  []string
 	found bool
 }
 
@@ -66,21 +67,16 @@ func urlParse(rawurl string) (*url.URL, error) {
 	return m, err
 }
 
-func filterQueryAddTagNames(sb *stringutils.Builder, names map[string]bool) {
-	first := true
-	for name := range names {
-		if first {
-			first = false
-			//sb.WriteString("'" + name + "'")
-			sb.WriteString("'")
-		} else {
-			//sb.WriteString(", '" + name + "'")
-			sb.WriteString(", '")
-		}
-		sb.WriteString(name)
-		sb.WriteString("'")
-
+// don't unescape special symbols
+// escape also not needed (all is done in receiver/plain.go, Base.PlainParseLine)
+func tagsParse(path string) (string, []string, error) {
+	name, args, n := stringutils.Split2(path, "?")
+	if n == 1 || args == "" {
+		return name, nil, fmt.Errorf("incomplete tags in '%s'", path)
 	}
+	name = "__name__=" + name
+	tags := strings.Split(args, "&")
+	return name, tags, nil
 }
 
 func (u *Tagged) cacheQueryCheck(connect *sql.DB, namesMap map[string]bool, paths []string, tags map[string]tagRow,
@@ -192,8 +188,8 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 			prestartTime = time.Now()
 		}
 		paths[n] = v.path
-		if _, ok := names[v.tags.Path]; !ok {
-			names[string(v.tags.Path)] = true
+		if _, ok := names[v.name]; !ok {
+			names[string(v.name)] = true
 		}
 		n++
 	}
@@ -240,8 +236,6 @@ func (u *Tagged) parseFile(filename string, out io.Writer, outNotify chan bool) 
 	defer wb.Release()
 	defer tagsBuf.Release()
 
-	tag1 := make([]string, 0)
-
 LineLoop:
 	for {
 		name, err := reader.ReadRecord()
@@ -267,14 +261,15 @@ LineLoop:
 		}
 
 		sname = string(name)
-		tags, err := urlParse(sname)
+
+		tagName, tags, err := tagsParse(sname)
 		if err != nil {
 			continue
 		}
-		tags.Path = "__name__=" + tags.Path
 		nocacheSeries[key] = tagRow{
 			days: reader.Days(),
 			path: sname,
+			name: tagName,
 			tags: tags,
 		}
 	}
@@ -285,6 +280,7 @@ LineLoop:
 	}
 
 	first := true
+	tag1 := make([]string, 0)
 	for _, v := range nocacheSeries {
 		if v.found {
 			skipped++
@@ -299,16 +295,14 @@ LineLoop:
 		tagsBuf.Reset()
 		tag1 = tag1[:0]
 
-		t := v.tags.Path
-		tag1 = append(tag1, t)
-		tagsBuf.WriteString(t)
+		tag1 = append(tag1, v.name)
+		tagsBuf.WriteString(v.name)
 
 		// don't upload any other tag but __name__
 		// if either main metric (m.Path) or each metric (*) is ignored
-		ignoreAllButName := u.ignoredMetrics[v.tags.Path] || u.ignoredMetrics["*"]
+		ignoreAllButName := u.ignoredMetrics[v.name] || u.ignoredMetrics["*"]
 		tagsWritten := 1
-		for k, vl := range v.tags.Query() {
-			t := k + "=" + vl[0]
+		for _, t := range v.tags {
 			tagsBuf.WriteString(t)
 			tagsWritten++
 

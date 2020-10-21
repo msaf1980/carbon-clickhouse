@@ -18,7 +18,7 @@ require (
 	github.com/lomik/zapwriter v0.0.0-20170315193840-d4499a33b592
 	github.com/mailru/go-clickhouse v1.3.0
 	github.com/mattn/go-sqlite3 v1.14.4 // indirect
-	github.com/msaf1980/stringutils v0.0.1
+	github.com/msaf1980/stringutils v0.0.2-0.20201020141843-69ada32f5dc0
 	github.com/pierrec/lz4 v2.5.2+incompatible
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/spaolacci/murmur3 v1.1.0

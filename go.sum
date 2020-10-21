@@ -42,6 +42,8 @@ github.com/mattn/go-sqlite3 v1.14.4 h1:4rQjbDxdu9fSgI/r3KN72G3c2goxknAqHHgPWWs8U
 github.com/mattn/go-sqlite3 v1.14.4/go.mod h1:WVKg1VTActs4Qso6iwGbiFih2UIHo0ENGwNd0Lj+XmI=
 github.com/msaf1980/stringutils v0.0.1 h1:g0EnWEuidjdhYju2brLAOiZAgSONqpJAAYF80uZImv0=
 github.com/msaf1980/stringutils v0.0.1/go.mod h1:PVF+ukHO/yBVWyAOLIeFJT5XyGoI2oR8y2S/8gOjJOw=
+github.com/msaf1980/stringutils v0.0.2-0.20201020141843-69ada32f5dc0 h1:mECAdOf/jCR2l5KiE0QfiW/MxRKyMMQb3hjrX8Q1syk=
+github.com/msaf1980/stringutils v0.0.2-0.20201020141843-69ada32f5dc0/go.mod h1:PVF+ukHO/yBVWyAOLIeFJT5XyGoI2oR8y2S/8gOjJOw=
 github.com/pierrec/lz4 v2.5.2+incompatible h1:WCjObylUIOlKy/+7Abdn34TLIkXiA4UWUMhxq9m9ZXI=
 github.com/pierrec/lz4 v2.5.2+incompatible/go.mod h1:pdkljMzZIN41W+lC3N2tnIh5sFi+IEE17M5jbnwPHcY=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=

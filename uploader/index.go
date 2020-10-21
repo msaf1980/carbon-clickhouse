@@ -12,7 +12,6 @@ import (
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
 	"github.com/lomik/zapwriter"
 	_ "github.com/mailru/go-clickhouse"
-	"github.com/msaf1980/stringutils"
 	"go.uber.org/zap"
 )
 
@@ -46,32 +45,6 @@ func NewIndex(base *Base) *Index {
 	u.cached.parser = u.parseFile
 	u.cacheQuery = fmt.Sprintf(indexQuery, u.config.TableName)
 	return u
-}
-
-func filterQueryAddPath(sb *stringutils.Builder, path string, n int) {
-	if n == 0 {
-		//sb.WriteString("'" + name + "'")
-		sb.WriteString("'")
-	} else {
-		//sb.WriteString(", '" + name + "'")
-		sb.WriteString(", '")
-	}
-	sb.WriteString(path)
-	sb.WriteString("'")
-}
-
-func filterQueryAddPaths(sb *stringutils.Builder, paths []string) {
-	for n, path := range paths {
-		if n == 0 {
-			//sb.WriteString("'" + name + "'")
-			sb.WriteString("'")
-		} else {
-			//sb.WriteString(", '" + name + "'")
-			sb.WriteString(", '")
-		}
-		sb.WriteString(path)
-		sb.WriteString("'")
-	}
 }
 
 func daysToDate(days uint16) time.Time {
