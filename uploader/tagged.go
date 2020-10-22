@@ -37,7 +37,7 @@ type tagRow struct {
 	found bool
 }
 
-const tagCacheBatchSize = 50000
+const tagCacheBatchSize = 400000
 
 const tagQueryS = "SELECT Path FROM %s WHERE Date = '"
 const tagQueryF1 = "' AND Tag1 IN ("
@@ -128,7 +128,7 @@ func (u *Tagged) cacheQueryCheck(ctx context.Context, names []string, paths []ta
 	if err != nil {
 		return err
 	}
-	endTime := time.Now()
+	qendTime := time.Now()
 	var found int
 	var keyerror int
 	scanner := bufio.NewScanner(reader)
@@ -140,9 +140,7 @@ func (u *Tagged) cacheQueryCheck(ctx context.Context, names []string, paths []ta
 		v, ok := tags[key]
 		if ok {
 			v.found = true
-			if v.found {
-				u.cached.existsCache.Add(key, startTime.Unix())
-			}
+			u.cached.existsCache.Add(key, startTime.Unix())
 			tags[key] = v
 			//fmt.Println(path)
 		} else {
@@ -154,8 +152,11 @@ func (u *Tagged) cacheQueryCheck(ctx context.Context, names []string, paths []ta
 	if err = scanner.Err(); err != nil {
 		return err
 	}
+	endTime := time.Now()
 	logger.Info("cache", zap.String("filename", filename),
-		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(prestartTime)),
+		zap.Duration("query_time", qendTime.Sub(startTime)),
+		zap.Duration("time", endTime.Sub(startTime)),
+		zap.Duration("total_time", endTime.Sub(prestartTime)),
 		zap.Int("keyerror", keyerror), zap.Int("found", found),
 		zap.Int("checked", len(paths)), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil

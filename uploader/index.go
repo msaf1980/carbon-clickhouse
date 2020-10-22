@@ -42,7 +42,7 @@ type indexRow struct {
 	foundTree bool
 }
 
-const indexCacheBatchSize = 50000
+const indexCacheBatchSize = 400000
 
 const indexQueryS = "SELECT Path, groupUniqArray(Date) as Dates FROM %s WHERE Date IN ('"
 const indexQueryF = "') AND Path IN ("
@@ -160,7 +160,7 @@ func (u *Index) cacheQueryCheck(ctx context.Context, paths []indexRow, indexes m
 	days := paths[0].days
 	sql := u.cacheQuerySql(paths, days, treeDays)
 	reader, err := clickhouse.Reader(ctx, u.config.URL, sql, u.opts)
-	endTime := time.Now()
+	qendTime := time.Now()
 	if err != nil {
 		return err
 	}
@@ -229,8 +229,11 @@ func (u *Index) cacheQueryCheck(ctx context.Context, paths []indexRow, indexes m
 	if err = scanner.Err(); err != nil {
 		return err
 	}
+	endTime := time.Now()
 	logger.Info("cache", zap.String("filename", filename),
-		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(prestartTime)),
+		zap.Duration("query_time", qendTime.Sub(startTime)),
+		zap.Duration("time", endTime.Sub(startTime)),
+		zap.Duration("total_time", endTime.Sub(prestartTime)),
 		zap.Int("keyerror", keyerror), zap.Int("found", found),
 		zap.Int("checked", len(paths)), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil
