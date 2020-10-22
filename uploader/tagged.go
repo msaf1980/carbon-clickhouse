@@ -88,7 +88,7 @@ func tagsParse(path string) (string, []string, error) {
 	return name, tags, nil
 }
 
-func (u *Tagged) cacheQuerySql(names []string, paths []string, days uint16) string {
+func (u *Tagged) cacheQuerySql(names []string, paths []tagRow, days uint16) string {
 	var sb stringutils.Builder
 	sb.Grow(len(paths) * 200)
 	sb.WriteString(u.cacheQuery)
@@ -110,7 +110,7 @@ func (u *Tagged) cacheQuerySql(names []string, paths []string, days uint16) stri
 		} else {
 			sb.WriteString(", '")
 		}
-		sb.WriteString(path)
+		sb.WriteString(path.path)
 		sb.WriteRune('\'')
 	}
 	sb.WriteString(tagQueryE)
@@ -118,7 +118,7 @@ func (u *Tagged) cacheQuerySql(names []string, paths []string, days uint16) stri
 	return sb.String()
 }
 
-func (u *Tagged) cacheQueryCheck(ctx context.Context, namesMap map[string]bool, paths []string, tags map[string]tagRow,
+func (u *Tagged) cacheQueryCheck(ctx context.Context, namesMap map[string]bool, paths []tagRow, tags map[string]tagRow,
 	days uint16, filename string, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("tags")
@@ -179,53 +179,41 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 	var checks int
 	var days uint16
 	prestartTime := time.Now()
-	paths := make([]string, tagCacheBatchSize)
 	names := make(map[string]bool)
-	var namesSb stringutils.Builder
-	namesSb.Grow(tagCacheBatchSize)
-	tagsSorted := make([]tagRow, len(tags))
+	paths := make([]tagRow, len(tags))
 	for _, v := range tags {
-		tagsSorted[n] = v
+		paths[n] = v
 		n++
 	}
-	sort.Slice(tagsSorted, func(i, j int) bool {
-		if tagsSorted[i].days == tagsSorted[j].days {
-			return tagsSorted[i].path < tagsSorted[j].path
+	sort.Slice(paths, func(i, j int) bool {
+		if paths[i].days == paths[j].days {
+			return paths[i].path < paths[j].path
 		}
-		return tagsSorted[i].days < tagsSorted[j].days
+		return paths[i].days < paths[j].days
 	})
 	n = 0
-	for _, v := range tagsSorted {
-		if n >= tagCacheBatchSize || (n > 0 && days != v.days) {
-			checks += n
-			err := u.cacheQueryCheck(ctx, names, paths[0:n], tags, days, filename, checks, len(tags), prestartTime)
+	i := 0
+	for {
+		if i-n >= tagCacheBatchSize || (i == len(paths) && i != n) || (i-n > 0 && days != paths[i].days) {
+			checks += i - n
+			err := u.cacheQueryCheck(ctx, names, paths[n:i], tags, days, filename, checks, len(tags), prestartTime)
 			names = make(map[string]bool)
 			if err != nil {
 				return nil, err
 			}
-			if days != v.days {
-				days = v.days
-			}
+			n = i
+		}
+		if i == len(paths) {
+			break
+		}
+		if days != paths[i].days {
+			days = paths[i].days
 			prestartTime = time.Now()
-			n = 0
 		}
-		if days != v.days {
-			days = v.days
-			prestartTime = time.Now()
+		if _, ok := names[paths[i].name]; !ok {
+			names[string(paths[i].name)] = true
 		}
-		paths[n] = v.path
-		if _, ok := names[v.name]; !ok {
-			names[string(v.name)] = true
-		}
-		n++
-	}
-
-	if n > 0 {
-		checks += n
-		err := u.cacheQueryCheck(ctx, names, paths[0:n], tags, days, filename, checks, len(tags), prestartTime)
-		if err != nil {
-			return nil, err
-		}
+		i++
 	}
 
 	for key, v := range tags {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,7 +62,7 @@ func daysToDate(days uint16) time.Time {
 	return time.Unix(86400*int64(days), 0)
 }
 
-func (u *Index) cacheQuerySql(paths []string, days uint16, treeDays uint16) string {
+func (u *Index) cacheQuerySql(paths []indexRow, days uint16, treeDays uint16) string {
 	var sb stringutils.Builder
 	sb.Grow(len(paths) * 200)
 	sb.WriteString(u.cacheQuery)
@@ -69,13 +70,13 @@ func (u *Index) cacheQuerySql(paths []string, days uint16, treeDays uint16) stri
 	sb.WriteString("', '")
 	sb.WriteString(daysToDate(treeDays).Format("2006-01-02"))
 	sb.WriteString(indexQueryF)
-	for n, path := range paths {
+	for n, v := range paths {
 		if n == 0 {
 			sb.WriteRune('\'')
 		} else {
 			sb.WriteString(", '")
 		}
-		sb.WriteString(path)
+		sb.Write(v.path)
 		sb.WriteRune('\'')
 	}
 	sb.WriteString(indexQueryE)
@@ -150,12 +151,13 @@ func dataPathDatesSplit(data []byte, atEOF bool) (advance int, token []byte, err
 	return tokenLen, data[:tokenLen], nil
 }
 
-func (u *Index) cacheQueryCheck(ctx context.Context, paths []string, indexes map[string]indexRow,
-	days uint16, treeDays uint16, filename string, totalchecks, total int, prestartTime time.Time) error {
+func (u *Index) cacheQueryCheck(ctx context.Context, paths []indexRow, indexes map[string]indexRow,
+	treeDays uint16, filename string, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("index")
 
 	startTime := time.Now()
+	days := paths[0].days
 	sql := u.cacheQuerySql(paths, days, treeDays)
 	reader, err := clickhouse.Reader(ctx, u.config.URL, sql, u.opts)
 	endTime := time.Now()
@@ -242,50 +244,68 @@ func geRequestIDFromFilename(filename string) string {
 	}
 }
 
+// indexNextDay get next day location on sorted slice
+func indexNextDay(indexes []indexRow, start int, max int) int {
+	end := len(indexes) - 1
+	days := indexes[start].days
+	if indexes[end].days == days {
+		if len(indexes) > start+max {
+			return start + max
+		}
+		return len(indexes)
+	}
+
+	pos := start
+	for pos < end {
+		median := pos + (end-pos)/2
+
+		if indexes[median].days > days {
+			end = median
+		} else {
+			pos = median + 1
+		}
+	}
+	if pos > start+max {
+		return start + max
+	}
+	return pos
+}
+
 func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, filename string) (map[string]bool, error) {
 	newSeries := make(map[string]bool)
 	if len(indexes) == 0 {
 		return newSeries, nil
 	}
 
-	//connect, err := sql.Open("clickhouse", u.config.URL)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
 	var n int
 	var checks int
-	var days uint16
 	ctx := scope.WithRequestID(context.Background(), geRequestIDFromFilename(filename))
 	prestartTime := time.Now()
-	paths := make([]string, tagCacheBatchSize)
+	paths := make([]indexRow, len(indexes))
 	for _, v := range indexes {
-		if n >= indexCacheBatchSize || (n > 0 && days != v.days) {
-			checks += n
-			err := u.cacheQueryCheck(ctx, paths[0:n], indexes, days, treeDays, filename, checks, len(indexes), prestartTime)
-			if err != nil {
-				return nil, err
-			}
-			if days != v.days {
-				days = v.days
-			}
-			prestartTime = time.Now()
-			n = 0
-		}
-		if days != v.days {
-			days = v.days
-			prestartTime = time.Now()
-		}
-		paths[n] = unsafeString(v.path)
+		paths[n] = v
 		n++
 	}
+	// sort for index sequentional scan (on date/path)
+	sort.Slice(paths, func(i, j int) bool {
+		if paths[i].days == paths[j].days {
+			return unsafeString(paths[i].path) < unsafeString(paths[j].path)
+		}
+		return paths[i].days < paths[j].days
+	})
 
-	if n > 0 {
-		checks += n
-		err := u.cacheQueryCheck(ctx, paths[0:n], indexes, days, treeDays, filename, checks, len(indexes), prestartTime)
+	n = 0
+	for {
+		i := indexNextDay(paths, n, indexCacheBatchSize)
+		checks += i - n
+		err := u.cacheQueryCheck(ctx, paths[n:i], indexes, treeDays, filename, checks, len(indexes), prestartTime)
 		if err != nil {
 			return nil, err
+		} else if i == len(paths) {
+			break
 		}
+		n = i
+		prestartTime = time.Now()
 	}
 
 	for key, v := range indexes {
