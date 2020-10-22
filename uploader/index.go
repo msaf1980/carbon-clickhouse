@@ -1,22 +1,28 @@
 package uploader
 
 import (
+	"bufio"
 	"bytes"
-	"database/sql"
+	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"path"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
+	"github.com/lomik/graphite-clickhouse/helper/clickhouse"
+	"github.com/lomik/graphite-clickhouse/pkg/scope"
 	"github.com/lomik/zapwriter"
-	_ "github.com/mailru/go-clickhouse"
+	"github.com/msaf1980/stringutils"
 	"go.uber.org/zap"
 )
 
 type Index struct {
 	*cached
+	opts clickhouse.Options
 }
 
 var _ Uploader = &Index{}
@@ -37,13 +43,17 @@ type indexRow struct {
 
 const indexCacheBatchSize = 50000
 
-const indexQuery = "SELECT Path, groupUniqArray(Date) as Dates FROM %s WHERE Date IN (?) AND Path IN (?) GROUP BY Path"
+const indexQueryS = "SELECT Path, groupUniqArray(Date) as Dates FROM %s WHERE Date IN ('"
+const indexQueryF = "') AND Path IN ("
+const indexQueryE = ") GROUP BY Path FORMAT RowBinary"
 
 func NewIndex(base *Base) *Index {
 	u := &Index{}
 	u.cached = newCached(base)
 	u.cached.parser = u.parseFile
-	u.cacheQuery = fmt.Sprintf(indexQuery, u.config.TableName)
+	u.cacheQuery = fmt.Sprintf(indexQueryS, u.config.TableName)
+	u.opts.ConnectTimeout = u.config.Timeout.Duration
+	u.opts.Timeout = u.config.Timeout.Duration
 	return u
 }
 
@@ -51,52 +61,160 @@ func daysToDate(days uint16) time.Time {
 	return time.Unix(86400*int64(days), 0)
 }
 
-func (u *Index) cacheQueryCheck(connect *sql.DB, paths []string, indexes map[string]indexRow,
+func (u *Index) cacheQuerySql(paths []string, days uint16, treeDays uint16) string {
+	var sb stringutils.Builder
+	sb.Grow(len(paths) * 200)
+	sb.WriteString(u.cacheQuery)
+	sb.WriteString(daysToDate(days).Format("2006-01-02"))
+	sb.WriteString("', '")
+	sb.WriteString(daysToDate(treeDays).Format("2006-01-02"))
+	sb.WriteString(indexQueryF)
+	for n, path := range paths {
+		if n == 0 {
+			sb.WriteRune('\'')
+		} else {
+			sb.WriteString(", '")
+		}
+		sb.WriteString(path)
+		sb.WriteRune('\'')
+	}
+	sb.WriteString(indexQueryE)
+
+	return sb.String()
+}
+
+// TODO: may be move to github.com/lomik/graphite-clickhouse/helper/clickhouse like ReadUvarint
+func readString(b []byte) (string, int, error) {
+	n, readBytes, err := clickhouse.ReadUvarint(b)
+	if err != nil {
+		return "", 0, clickhouse.ErrClickHouseResponse
+	}
+	pathLen := int(n)
+	if len(b) < pathLen+readBytes {
+		return "", 0, clickhouse.ErrClickHouseResponse
+	}
+	return stringutils.UnsafeStringFromPtr(&b[readBytes], pathLen), pathLen + readBytes, nil
+}
+
+// dataPathDatesSplit is a split function for bufio.Scanner for read row binary response for queries with fileds:
+// Path, array(Date)
+func dataPathDatesSplit(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if len(data) == 0 && atEOF {
+		// stop
+		return 0, nil, nil
+	}
+	var tokenLen int
+	var fieldLen uint64
+	var seek int
+
+	// path
+	fieldLen, seek, err = clickhouse.ReadUvarint(data)
+	if err != nil {
+		if atEOF {
+			return 0, nil, err
+		} else {
+			// Request more data.
+			return 0, nil, nil
+		}
+	}
+	tokenLen += seek + int(fieldLen)
+	if len(data) < tokenLen+1 {
+		if atEOF {
+			return 0, nil, clickhouse.ErrClickHouseResponse
+		} else {
+			// Request more data.
+			return 0, nil, nil
+		}
+	}
+
+	// dates
+	fieldLen, seek, err = clickhouse.ReadUvarint(data[tokenLen:])
+	if err != nil {
+		if atEOF {
+			return 0, nil, err
+		} else {
+			// Request more data.
+			return 0, nil, nil
+		}
+	}
+	tokenLen += seek + int(fieldLen)*2 // sizeof(UInt16) * array_size
+	if len(data) < tokenLen {
+		if atEOF {
+			return 0, nil, clickhouse.ErrClickHouseResponse
+		} else {
+			// Request more data.
+			return 0, nil, nil
+		}
+	}
+
+	return tokenLen, data[:tokenLen], nil
+}
+
+func (u *Index) cacheQueryCheck(ctx context.Context, paths []string, indexes map[string]indexRow,
 	days uint16, treeDays uint16, filename string, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("index")
+
 	startTime := time.Now()
-	dates := []string{daysToDate(days).Format("2006-01-02"), daysToDate(treeDays).Format("2006-01-02")}
-	query, args, err := sqlx.In(u.cacheQuery, dates, paths)
-	if err != nil {
-		logger.Error("cache", zap.Strings("date", dates),
-			zap.String("filename", filename), zap.Error(err),
-			zap.Duration("query_time", time.Now().Sub(startTime)))
-		return err
-	}
-	rows, err := connect.Query(query, args...)
+	sql := u.cacheQuerySql(paths, days, treeDays)
+	reader, err := clickhouse.Reader(ctx, u.config.URL, sql, u.opts)
 	endTime := time.Now()
 	if err != nil {
-		logger.Error("cache", zap.Strings("date", dates),
-			zap.String("filename", filename), zap.Error(err),
-			zap.Duration("query_time", endTime.Sub(startTime)))
 		return err
 	}
 	var found int
 	var keyerror int
-	for rows.Next() {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 1048576), 0)
+	scanner.Split(dataPathDatesSplit)
+	for scanner.Scan() {
+		var pos int
+		var n uint64
+		var seek int
 		var path string
-		var sDates []time.Time
-		if err = rows.Scan(&path, &sDates); err != nil {
-			if err != nil {
-				return err
-			}
+		var dates [2]uint16
+		// var sDates []time.Time
+		rowStart := scanner.Bytes()
+		if len(rowStart) == 0 {
+			continue
 		}
+		path, seek, err = readString(rowStart)
+		if err != nil {
+			return err
+		}
+		pos += seek
+
+		n, seek, err = clickhouse.ReadUvarint(rowStart[pos:])
+		if err != nil {
+			return err
+		}
+		datesCount := int(n)
+		if len(rowStart) < datesCount+2*datesCount {
+			return clickhouse.ErrClickHouseResponse
+		}
+		pos += seek
+		for i := 0; i < datesCount; i++ {
+			dates[i] = binary.LittleEndian.Uint16(rowStart[pos : pos+2])
+			pos += 2
+		}
+
 		key := strconv.Itoa(int(days)) + ":" + path
 		v, ok := indexes[key]
 		if !ok {
 			keyerror++
-			err = fmt.Errorf("key '%s' not found during index lookup, may be wrong filter generated", key)
-			logger.Error("cache", zap.String("date", dates[0]), zap.Error(err))
+			s := "key '" + key + "' not found during index lookup, may be wrong filter generated"
+			logger.Error("cache", zap.String("date", daysToDate(days).Format("2006-01-02")), zap.String("error", s))
 			continue
 		}
 		found++
-		for _, dd := range sDates {
-			d := RowBinary.SlowTimeToDays(dd)
-			if d == days {
+		for i := 0; i < datesCount; i++ {
+			if dates[i] == days {
 				v.found = true
-			} else {
+			} else if dates[i] == treeDays {
 				v.foundTree = true
+			} else {
+				s := fmt.Sprintf("day '%d' not found during index lookup, may be RowBinary parser error", dates[i])
+				logger.Error("cache", zap.String("date", daysToDate(days).Format("2006-01-02")), zap.String("error", s))
 			}
 		}
 		if v.found || v.foundTree {
@@ -106,11 +224,22 @@ func (u *Index) cacheQueryCheck(connect *sql.DB, paths []string, indexes map[str
 			u.cached.existsCache.Add(key, startTime.Unix())
 		}
 	}
+	if err = scanner.Err(); err != nil {
+		return err
+	}
 	logger.Info("cache", zap.String("filename", filename),
 		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(prestartTime)),
 		zap.Int("keyerror", keyerror), zap.Int("found", found),
 		zap.Int("checked", len(paths)), zap.Int("processed", totalchecks), zap.Int("total", total))
 	return nil
+}
+
+func geRequestIDFromFilename(filename string) string {
+	if i := strings.LastIndex(filename, "."); i == -1 {
+		return path.Base(filename)
+	} else {
+		return filename[i+1:]
+	}
 }
 
 func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, filename string) (map[string]bool, error) {
@@ -119,20 +248,21 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 		return newSeries, nil
 	}
 
-	connect, err := sql.Open("clickhouse", u.config.URL)
-	if err != nil {
-		return nil, err
-	}
+	//connect, err := sql.Open("clickhouse", u.config.URL)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	var n int
 	var checks int
 	var days uint16
+	ctx := scope.WithRequestID(context.Background(), geRequestIDFromFilename(filename))
 	prestartTime := time.Now()
 	paths := make([]string, tagCacheBatchSize)
 	for _, v := range indexes {
 		if n >= indexCacheBatchSize || (n > 0 && days != v.days) {
 			checks += n
-			err = u.cacheQueryCheck(connect, paths[0:n], indexes, days, treeDays, filename, checks, len(indexes), prestartTime)
+			err := u.cacheQueryCheck(ctx, paths[0:n], indexes, days, treeDays, filename, checks, len(indexes), prestartTime)
 			if err != nil {
 				return nil, err
 			}
@@ -152,7 +282,7 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 
 	if n > 0 {
 		checks += n
-		err = u.cacheQueryCheck(connect, paths[0:n], indexes, days, treeDays, filename, checks, len(indexes), prestartTime)
+		err := u.cacheQueryCheck(ctx, paths[0:n], indexes, days, treeDays, filename, checks, len(indexes), prestartTime)
 		if err != nil {
 			return nil, err
 		}

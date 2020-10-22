@@ -1,8 +1,9 @@
 package uploader
 
 import (
+	"bufio"
 	"bytes"
-	"database/sql"
+	"context"
 	"fmt"
 	"io"
 	"net/url"
@@ -11,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
+	"github.com/lomik/graphite-clickhouse/helper/clickhouse"
+	"github.com/lomik/graphite-clickhouse/pkg/scope"
 	"github.com/lomik/zapwriter"
 	"github.com/msaf1980/stringutils"
 	"go.uber.org/zap"
@@ -20,6 +22,7 @@ import (
 
 type Tagged struct {
 	*cached
+	opts           clickhouse.Options
 	ignoredMetrics map[string]bool
 }
 
@@ -35,14 +38,20 @@ type tagRow struct {
 }
 
 const tagCacheBatchSize = 50000
-const tagQuery = "SELECT Path FROM %s WHERE Date = ? AND Tag1 IN (?) AND Path IN (?) GROUP BY Path"
+
+const tagQueryS = "SELECT Path FROM %s WHERE Date = '"
+const tagQueryF1 = "' AND Tag1 IN ("
+const tagQueryF2 = ") AND Path IN ("
+const tagQueryE = ") GROUP BY Path"
 
 func NewTagged(base *Base) *Tagged {
 	u := &Tagged{}
 	u.cached = newCached(base)
 	u.cached.parser = u.parseFile
 	u.query = fmt.Sprintf("%s (Date, Tag1, Path, Tags, Version)", u.config.TableName)
-	u.cacheQuery = fmt.Sprintf(tagQuery, u.config.TableName)
+	u.cacheQuery = fmt.Sprintf(tagQueryS, u.config.TableName)
+	u.opts.ConnectTimeout = u.config.Timeout.Duration
+	u.opts.Timeout = u.config.Timeout.Duration
 
 	u.ignoredMetrics = make(map[string]bool, len(u.config.IgnoredTaggedMetrics))
 	for _, metric := range u.config.IgnoredTaggedMetrics {
@@ -79,39 +88,59 @@ func tagsParse(path string) (string, []string, error) {
 	return name, tags, nil
 }
 
-func (u *Tagged) cacheQueryCheck(connect *sql.DB, namesMap map[string]bool, paths []string, tags map[string]tagRow,
+func (u *Tagged) cacheQuerySql(names []string, paths []string, days uint16) string {
+	var sb stringutils.Builder
+	sb.Grow(len(paths) * 200)
+	sb.WriteString(u.cacheQuery)
+	sb.WriteString(daysToDate(days).Format("2006-01-02"))
+	sb.WriteString(tagQueryF1)
+	for n, name := range names {
+		if n == 0 {
+			sb.WriteRune('\'')
+		} else {
+			sb.WriteString(", '")
+		}
+		sb.WriteString(name)
+		sb.WriteRune('\'')
+	}
+	sb.WriteString(tagQueryF2)
+	for n, path := range paths {
+		if n == 0 {
+			sb.WriteRune('\'')
+		} else {
+			sb.WriteString(", '")
+		}
+		sb.WriteString(path)
+		sb.WriteRune('\'')
+	}
+	sb.WriteString(tagQueryE)
+
+	return sb.String()
+}
+
+func (u *Tagged) cacheQueryCheck(ctx context.Context, namesMap map[string]bool, paths []string, tags map[string]tagRow,
 	days uint16, filename string, totalchecks, total int, prestartTime time.Time) error {
 
 	logger := zapwriter.Logger("tags")
 	startTime := time.Now()
-	date := daysToDate(days).Format("2006-01-02")
 	names := make([]string, len(namesMap))
 	n := 0
 	for name := range namesMap {
 		names[n] = name
 		n++
 	}
-	query, args, err := sqlx.In(u.cacheQuery, date, names, paths)
+	sql := u.cacheQuerySql(names, paths, days)
+	reader, err := clickhouse.Reader(ctx, u.config.URL, sql, u.opts)
 	if err != nil {
-		logger.Error("cache", zap.String("date", date),
-			zap.String("filename", filename), zap.Error(err),
-			zap.Duration("query_time", time.Now().Sub(startTime)))
 		return err
 	}
-	rows, err := connect.Query(query, args...)
 	endTime := time.Now()
-	if err != nil {
-		logger.Debug("cache", zap.String("date", date), zap.String("filename", filename), zap.Error(err),
-			zap.Duration("query_time", endTime.Sub(startTime)))
-		return err
-	}
 	var found int
 	var keyerror int
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
-			return err
-		}
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 1048576), 0)
+	for scanner.Scan() {
+		path := unsafeString(scanner.Bytes())
 		found++
 		key := strconv.Itoa(int(days)) + ":" + path
 		v, ok := tags[key]
@@ -124,9 +153,12 @@ func (u *Tagged) cacheQueryCheck(connect *sql.DB, namesMap map[string]bool, path
 			//fmt.Println(path)
 		} else {
 			keyerror++
-			err = fmt.Errorf("key '%s' not found during tag lookup, may be wrong filter generated", key)
-			logger.Error("cache", zap.String("date", date), zap.Error(err))
+			s := "key '" + key + "' not found during tag lookup, may be wrong filter generated"
+			logger.Error("cache", zap.String("date", daysToDate(days).Format("2006-01-02")), zap.String("error", s))
 		}
+	}
+	if err = scanner.Err(); err != nil {
+		return err
 	}
 	logger.Info("cache", zap.String("filename", filename),
 		zap.Duration("query_time", endTime.Sub(startTime)), zap.Duration("time", time.Since(prestartTime)),
@@ -141,13 +173,7 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 		return newTags, nil
 	}
 
-	connect, err := sql.Open("clickhouse", u.config.URL)
-	if err != nil {
-		return nil, err
-	}
-	if err := connect.Ping(); err != nil {
-		return nil, err
-	}
+	ctx := scope.WithRequestID(context.Background(), geRequestIDFromFilename(filename))
 
 	var n int
 	var checks int
@@ -172,7 +198,7 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 	for _, v := range tagsSorted {
 		if n >= tagCacheBatchSize || (n > 0 && days != v.days) {
 			checks += n
-			err = u.cacheQueryCheck(connect, names, paths[0:n], tags, days, filename, checks, len(tags), prestartTime)
+			err := u.cacheQueryCheck(ctx, names, paths[0:n], tags, days, filename, checks, len(tags), prestartTime)
 			names = make(map[string]bool)
 			if err != nil {
 				return nil, err
@@ -196,7 +222,7 @@ func (u *Tagged) cacheBatchRecheck(tags map[string]tagRow, filename string) (map
 
 	if n > 0 {
 		checks += n
-		err = u.cacheQueryCheck(connect, names, paths[0:n], tags, days, filename, checks, len(tags), prestartTime)
+		err := u.cacheQueryCheck(ctx, names, paths[0:n], tags, days, filename, checks, len(tags), prestartTime)
 		if err != nil {
 			return nil, err
 		}
