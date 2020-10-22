@@ -227,7 +227,7 @@ func (u *Tagged) parseFile(filename string, out io.Writer, outNotify chan bool) 
 	var skipped uint64
 	var skippedTree uint64
 
-	logger := zapwriter.Logger("index")
+	logger := zapwriter.Logger("tags")
 	startTime := time.Now()
 
 	defer func() { outNotify <- true }()
