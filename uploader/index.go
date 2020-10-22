@@ -277,37 +277,38 @@ func (u *Index) cacheBatchRecheck(indexes map[string]indexRow, treeDays uint16, 
 		return newSeries, nil
 	}
 
-	var n int
-	var checks int
-	ctx := scope.WithRequestID(context.Background(), geRequestIDFromFilename(filename))
-	prestartTime := time.Now()
-	paths := make([]indexRow, len(indexes))
-	for _, v := range indexes {
-		paths[n] = v
-		n++
-	}
-	// sort for index sequentional scan (on date/path)
-	sort.Slice(paths, func(i, j int) bool {
-		if paths[i].days == paths[j].days {
-			return unsafeString(paths[i].path) < unsafeString(paths[j].path)
+	if !u.config.NoQueryCache {
+		var n int
+		var checks int
+		ctx := scope.WithRequestID(context.Background(), geRequestIDFromFilename(filename))
+		prestartTime := time.Now()
+		paths := make([]indexRow, len(indexes))
+		for _, v := range indexes {
+			paths[n] = v
+			n++
 		}
-		return paths[i].days < paths[j].days
-	})
+		// sort for index sequentional scan (on date/path)
+		sort.Slice(paths, func(i, j int) bool {
+			if paths[i].days == paths[j].days {
+				return unsafeString(paths[i].path) < unsafeString(paths[j].path)
+			}
+			return paths[i].days < paths[j].days
+		})
 
-	n = 0
-	for {
-		i := indexNextDay(paths, n, indexCacheBatchSize)
-		checks += i - n
-		err := u.cacheQueryCheck(ctx, paths[n:i], indexes, treeDays, filename, checks, len(indexes), prestartTime)
-		if err != nil {
-			return nil, err
-		} else if i == len(paths) {
-			break
+		n = 0
+		for {
+			i := indexNextDay(paths, n, indexCacheBatchSize)
+			checks += i - n
+			err := u.cacheQueryCheck(ctx, paths[n:i], indexes, treeDays, filename, checks, len(indexes), prestartTime)
+			if err != nil {
+				return nil, err
+			} else if i == len(paths) {
+				break
+			}
+			n = i
+			prestartTime = time.Now()
 		}
-		n = i
-		prestartTime = time.Now()
 	}
-
 	for key, v := range indexes {
 		if !v.found || !v.foundTree {
 			newSeries[key] = true
