@@ -97,10 +97,12 @@ func (u *Tagged) writeMetric(wb *RowBinary.WriteBuffer, tagsBuf *RowBinary.Write
 	}
 }
 
-func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
+func (u *Tagged) parseFile(filename string, out io.Writer, outNotify chan bool) (uint64, uint64, uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
 	var n uint64
+
+	defer func() { outNotify <- true }()
 
 	reader, err = RowBinary.NewReader(filename, false)
 	if err != nil {
@@ -117,6 +119,7 @@ func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, uint64, uint
 	defer wb.Release()
 	defer tagsBuf.Release()
 
+	outNotify <- true
 LineLoop:
 	for {
 		name, err := reader.ReadRecord()

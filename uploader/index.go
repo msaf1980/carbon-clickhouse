@@ -79,10 +79,12 @@ func (u *Index) writeMetric(wb *RowBinary.WriteBuffer, path []byte, day uint16, 
 	wb.WriteUint32(version)
 }
 
-func (u *Index) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
+func (u *Index) parseFile(filename string, out io.Writer, outNotify chan bool) (uint64, uint64, uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
 	var n uint64
+
+	defer func() { outNotify <- true }()
 
 	reader, err = RowBinary.NewReader(filename, false)
 	if err != nil {
@@ -100,6 +102,7 @@ func (u *Index) parseFile(filename string, out io.Writer) (uint64, uint64, uint6
 		treeDate = RowBinary.TimestampToDays(uint32(u.config.TreeDate.Unix()))
 	}
 
+	outNotify <- true
 LineLoop:
 	for {
 		name, err := reader.ReadRecord()

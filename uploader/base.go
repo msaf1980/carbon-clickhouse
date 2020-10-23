@@ -237,7 +237,7 @@ func compress(data io.Reader) io.Reader {
 	return pr
 }
 
-func (u *Base) insertRowBinary(table string, data io.Reader) error {
+func (u *Base) insertRowBinary(table string, data io.Reader, inNotify chan bool) error {
 	p, err := url.Parse(u.config.URL)
 	if err != nil {
 		return err
@@ -250,6 +250,12 @@ func (u *Base) insertRowBinary(table string, data io.Reader) error {
 	queryUrl := p.String()
 
 	var req *http.Request
+
+	// wait for uploader ready (for prevent possible timeouts when processing large files)
+	status := <-inNotify
+	if !status {
+		return nil
+	}
 
 	if u.config.CompressData {
 		req, err = http.NewRequest("POST", queryUrl, compress(data))
