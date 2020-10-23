@@ -62,14 +62,49 @@ func tagsParse(path string) (string, []string, error) {
 	return name, tags, nil
 }
 
-func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, map[string]bool, error) {
+func (u *Tagged) writeMetric(wb *RowBinary.WriteBuffer, tagsBuf *RowBinary.WriteBuffer,
+	path string, mname string, tags []string, day uint16, version uint32) {
+
+	tagsBuf.WriteString(mname)
+
+	// don't upload any other tag but __name__
+	// if either main metric (m.Path) or each metric (*) is ignored
+	ignoreAllButName := u.ignoredMetrics[mname] || u.ignoredMetrics["*"]
+	tagsWritten := 1
+	for _, tag := range tags {
+		tagsBuf.WriteString(tag)
+	}
+
+	if !ignoreAllButName {
+		tagsWritten += len(tags)
+	}
+
+	wb.WriteUint16(day)
+	wb.WriteString(mname)
+	wb.WriteString(path)
+	wb.WriteUVarint(uint64(tagsWritten))
+	wb.Write(tagsBuf.Bytes())
+	wb.WriteUint32(version)
+	if !ignoreAllButName {
+		for i := 0; i < len(tags); i++ {
+			wb.WriteUint16(day)
+			wb.WriteString(tags[i])
+			wb.WriteString(path)
+			wb.WriteUVarint(uint64(tagsWritten))
+			wb.Write(tagsBuf.Bytes())
+			wb.WriteUint32(version)
+		}
+	}
+}
+
+func (u *Tagged) parseFile(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
 	var n uint64
 
 	reader, err = RowBinary.NewReader(filename, false)
 	if err != nil {
-		return n, nil, err
+		return n, 0, 0, nil, err
 	}
 	defer reader.Close()
 
@@ -95,7 +130,8 @@ LineLoop:
 		}
 
 		day := reader.Days()
-		key := strconv.Itoa(int(day)) + ":" + unsafeString(name)
+		path := unsafeString(name)
+		key := strconv.Itoa(int(day)) + ":" + path
 
 		if u.existsCache.Exists(key) {
 			continue LineLoop
@@ -106,7 +142,7 @@ LineLoop:
 		}
 		n++
 
-		mname, tags, err := tagsParse(unsafeString(name))
+		mname, tags, err := tagsParse(path)
 		if err != nil {
 			continue
 		}
@@ -116,42 +152,13 @@ LineLoop:
 		wb.Reset()
 		tagsBuf.Reset()
 
-		tagsBuf.WriteString(mname)
-
-		// don't upload any other tag but __name__
-		// if either main metric (m.Path) or each metric (*) is ignored
-		ignoreAllButName := u.ignoredMetrics[mname] || u.ignoredMetrics["*"]
-		tagsWritten := 1
-		for _, tag := range tags {
-			tagsBuf.WriteString(tag)
-		}
-
-		if !ignoreAllButName {
-			tagsWritten += len(tags)
-		}
-
-		wb.WriteUint16(day)
-		wb.WriteString(mname)
-		wb.WriteBytes(name)
-		wb.WriteUVarint(uint64(tagsWritten))
-		wb.Write(tagsBuf.Bytes())
-		wb.WriteUint32(version)
-		if !ignoreAllButName {
-			for i := 0; i < len(tags); i++ {
-				wb.WriteUint16(day)
-				wb.WriteString(tags[i])
-				wb.WriteBytes(name)
-				wb.WriteUVarint(uint64(tagsWritten))
-				wb.Write(tagsBuf.Bytes())
-				wb.WriteUint32(version)
-			}
-		}
+		u.writeMetric(wb, tagsBuf, path, mname, tags, day, version)
 
 		_, err = out.Write(wb.Bytes())
 		if err != nil {
-			return n, nil, err
+			return n, 0, 0, nil, err
 		}
 	}
 
-	return n, newTagged, nil
+	return n, 0, 0, newTagged, nil
 }

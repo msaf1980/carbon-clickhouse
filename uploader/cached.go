@@ -18,8 +18,9 @@ type DebugCacheDumper interface {
 type cached struct {
 	*Base
 	existsCache CMap // store known keys and don't load it to clickhouse tree
-	parser      func(filename string, out io.Writer) (uint64, map[string]bool, error)
+	parser      func(filename string, out io.Writer) (uint64, uint64, uint64, map[string]bool, error)
 	expired     uint32 // atomic counter
+	cacheQuery  string // query template for cache update
 }
 
 func newCached(base *Base) *cached {
@@ -59,9 +60,11 @@ func (u *cached) Reset() {
 	u.existsCache.Clear()
 }
 
-func (u *cached) upload(ctx context.Context, logger *zap.Logger, filename string) (uint64, error) {
+func (u *cached) upload(ctx context.Context, logger *zap.Logger, filename string) (uint64, uint64, uint64, error) {
 	var n uint64
 	var err error
+	var skipped uint64
+	var skippedTree uint64
 	var newSeries map[string]bool
 
 	pipeReader, pipeWriter := io.Pipe()
@@ -81,7 +84,7 @@ func (u *cached) upload(ctx context.Context, logger *zap.Logger, filename string
 		}
 	})
 
-	n, newSeries, err = u.parser(filename, writer)
+	n, skipped, skippedTree, newSeries, err = u.parser(filename, writer)
 	if err == nil {
 		err = writer.Flush()
 	}
@@ -93,19 +96,19 @@ func (u *cached) upload(ctx context.Context, logger *zap.Logger, filename string
 	case uploadErr = <-uploadResult:
 		// pass
 	case <-ctx.Done():
-		return n, fmt.Errorf("upload aborted")
+		return n, skipped, skippedTree, fmt.Errorf("upload aborted")
 	}
 
 	if err != nil {
-		return n, err
+		return n, skipped, skippedTree, err
 	}
 
 	if uploadErr != nil {
-		return n, uploadErr
+		return n, skipped, skippedTree, uploadErr
 	}
 
 	// commit new series
 	u.existsCache.Merge(newSeries, startTime.Unix())
 
-	return n, nil
+	return n, skipped, skippedTree, nil
 }

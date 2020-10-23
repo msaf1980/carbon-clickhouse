@@ -94,6 +94,12 @@ func (m CMap) Merge(keys map[string]bool, value int64) {
 	}
 }
 
+func (m CMap) MergeSlice(keys []string, value int64) {
+	for _, key := range keys {
+		m.Add(key, value)
+	}
+}
+
 func (m CMap) Expire(ctx context.Context, ttl time.Duration) (int, int64) {
 	deadline := time.Now().Add(-ttl).Unix()
 

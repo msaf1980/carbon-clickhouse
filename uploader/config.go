@@ -19,6 +19,7 @@ type Config struct {
 	IgnoredPatterns      []string         `toml:"ignored-patterns,omitempty"` // points, points-reverse
 	CompressData         bool             `toml:"compress-data"`              //compress data while sending to clickhouse
 	IgnoredTaggedMetrics []string         `toml:"ignored-tagged-metrics"`     // for tagged table; create only `__name__` tag for these metrics and ignore others
+	QueryCache           bool             `toml:"query-cache"`                // Check metrics in database (for index or tagged table), if not found in local cache instead of simple insert
 }
 
 func (cfg *Config) Parse() error {
