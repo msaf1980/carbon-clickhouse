@@ -16,6 +16,7 @@ require (
 	github.com/pierrec/lz4 v2.5.2+incompatible
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/stretchr/testify v1.7.0
+	github.com/zeebo/xxh3 v0.13.0
 	github.com/zentures/cityhash v0.0.0-20131128155616-cdd6a94144ab
 	go.uber.org/multierr v1.6.0 // indirect
 	go.uber.org/zap v1.7.1
