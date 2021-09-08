@@ -3,12 +3,14 @@ package uploader
 import (
 	"encoding/binary"
 
+	"github.com/zeebo/xxh3"
 	"github.com/zentures/cityhash"
 )
 
 var knownHash = map[string](func(string) string){
 	"":       keepOriginal,
 	"city64": cityHash64,
+	"xxh3":   xxh3Hash64,
 }
 
 func keepOriginal(s string) string {
@@ -18,6 +20,14 @@ func keepOriginal(s string) string {
 func cityHash64(s string) string {
 	p := []byte(s)
 	h := cityhash.CityHash64(p, uint32(len(p)))
+
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], h)
+	return string(b[:])
+}
+
+func xxh3Hash64(s string) string {
+	h := xxh3.HashString(s)
 
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], h)
