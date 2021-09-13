@@ -11,7 +11,12 @@ var shardCount = 1024
 
 // A "thread" safe map of type string:Anything.
 // To avoid lock bottlenecks this map is dived to several (shardCount) map shards.
-type CMap []*CMapShard
+type CMap struct {
+	shards []*CMapShard
+
+	persistent bool
+	storeChan  chan string
+}
 
 // A "thread" safe string to anything map.
 type CMapShard struct {
@@ -20,11 +25,17 @@ type CMapShard struct {
 }
 
 // Creates a new concurrent map.
-func NewCMap() CMap {
-	m := make(CMap, shardCount)
+func NewCMap(storeQueueSize int) *CMap {
+	m := &CMap{shards: make([]*CMapShard, shardCount)}
 	for i := 0; i < shardCount; i++ {
-		m[i] = &CMapShard{items: make(map[string]int64)}
+		m.shards[i] = &CMapShard{items: make(map[string]int64)}
 	}
+
+	if storeQueueSize > 0 {
+		m.persistent = true
+		m.storeChan = make(chan string, storeQueueSize)
+	}
+
 	return m
 }
 
@@ -41,10 +52,10 @@ func fnv32(key string) uint32 {
 }
 
 // Returns the number of elements within the map.
-func (m CMap) Count() int {
+func (m *CMap) Count() int {
 	count := 0
 	for i := 0; i < shardCount; i++ {
-		shard := m[i]
+		shard := m.shards[i]
 		shard.RLock()
 		count += len(shard.items)
 		shard.RUnlock()
@@ -52,10 +63,10 @@ func (m CMap) Count() int {
 	return count
 }
 
-func (m CMap) Clear() int {
+func (m *CMap) Clear() int {
 	count := 0
 	for i := 0; i < shardCount; i++ {
-		shard := m[i]
+		shard := m.shards[i]
 		shard.Lock()
 		shard.items = make(map[string]int64)
 		shard.Unlock()
@@ -64,13 +75,13 @@ func (m CMap) Clear() int {
 }
 
 // Returns shard under given key
-func (m CMap) GetShard(key string) *CMapShard {
+func (m *CMap) GetShard(key string) *CMapShard {
 	// @TODO: remove type casts
-	return m[uint(fnv32(key))%uint(shardCount)]
+	return m.shards[uint(fnv32(key))%uint(shardCount)]
 }
 
 // Retrieves an element from map under given key.
-func (m CMap) Exists(key string) bool {
+func (m *CMap) Exists(key string) bool {
 	// Get shard
 	shard := m.GetShard(key)
 	shard.RLock()
@@ -81,20 +92,24 @@ func (m CMap) Exists(key string) bool {
 }
 
 // Sets the given value under the specified key.
-func (m CMap) Add(key string, value int64) {
+func (m *CMap) Add(key string, value int64, persistent bool) {
 	shard := m.GetShard(key)
 	shard.Lock()
 	shard.items[key] = value
 	shard.Unlock()
-}
 
-func (m CMap) Merge(keys map[string]bool, value int64) {
-	for key, _ := range keys {
-		m.Add(key, value)
+	if persistent && m.persistent {
+		m.storeChan <- key
 	}
 }
 
-func (m CMap) Expire(ctx context.Context, ttl time.Duration) (int, int64) {
+func (m *CMap) Merge(keys map[string]bool, value int64) {
+	for key, _ := range keys {
+		m.Add(key, value, m.persistent)
+	}
+}
+
+func (m *CMap) Expire(ctx context.Context, ttl time.Duration) (int, int64) {
 	deadline := time.Now().Add(-ttl).Unix()
 
 	count := 0
@@ -108,7 +123,7 @@ func (m CMap) Expire(ctx context.Context, ttl time.Duration) (int, int64) {
 			// pass
 		}
 
-		shard := m[i]
+		shard := m.shards[i]
 		shard.Lock()
 		for k, v := range shard.items {
 			if v < deadline {
@@ -123,7 +138,7 @@ func (m CMap) Expire(ctx context.Context, ttl time.Duration) (int, int64) {
 	return count, min
 }
 
-func (m CMap) ExpireWorker(ctx context.Context, ttl time.Duration, expiredCounter *uint32) {
+func (m *CMap) ExpireWorker(ctx context.Context, ttl time.Duration, expiredCounter *uint32) {
 	for {
 		interval := time.Minute
 		// @TODO: adaptive interval, based on min value from prev Expire run

@@ -24,9 +24,9 @@ var _ UploaderWithReset = &Tagged{}
 
 var errBufOverflow = fmt.Errorf("output buffer overflow")
 
-func NewTagged(base *Base) *Tagged {
+func NewTagged(base *Base, dataDir string) *Tagged {
 	u := &Tagged{}
-	u.cached = newCached(base)
+	u.cached = newCached(base, dataDir)
 	u.cached.parser = u.parseFile
 	u.query = fmt.Sprintf("%s (Date, Tag1, Path, Tags, Version)", u.config.TableName)
 

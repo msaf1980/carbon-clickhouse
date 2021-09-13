@@ -16,9 +16,9 @@ type Tree struct {
 var _ Uploader = &Tree{}
 var _ UploaderWithReset = &Tree{}
 
-func NewTree(base *Base) *Tree {
+func NewTree(base *Base, dataDir string) *Tree {
 	u := &Tree{}
-	u.cached = newCached(base)
+	u.cached = newCached(base, dataDir)
 	u.cached.parser = u.parseFile
 	if u.config.TreeDate.IsZero() {
 		u.query = fmt.Sprintf("%s (Level, Path, Version)", u.config.TableName)

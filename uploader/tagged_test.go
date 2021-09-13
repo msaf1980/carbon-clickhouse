@@ -151,7 +151,7 @@ func TestTagged_parseName_Overflow(t *testing.T) {
 		}
 		sb.WriteString(fmt.Sprintf("very_long_tag%d=very_long_value%d", i, i))
 	}
-	u := NewTagged(base)
+	u := NewTagged(base, "")
 	err := u.parseName(sb.String(), 10, 1024, tag1, wb, tagsBuf)
 	assert.Equal(t, errBufOverflow, err)
 }
@@ -441,7 +441,7 @@ func TestTagged_parseName(t *testing.T) {
 					IgnoredTaggedMetrics: tt.ignoredMetrics,
 				},
 			}
-			u := NewTagged(base)
+			u := NewTagged(base, "")
 			sort.Strings(tt.wantTags)
 			for i := 0; i < len(tt.wantResult); i++ {
 				tt.wantResult[i].tags = tt.wantTags
@@ -495,7 +495,7 @@ func BenchmarkParseNameShort(b *testing.B) {
 		logger:  logger,
 		config:  &Config{TableName: "test"},
 	}
-	u := NewTagged(base)
+	u := NewTagged(base, "")
 
 	name := "instance:cpu_utilization:ratio_avg?dc=qwe&fqdn=asd&instance=10.33.10.10_9100&job=node"
 	for i := 0; i < b.N; i++ {
@@ -521,7 +521,7 @@ func BenchmarkParseNameLong(b *testing.B) {
 		logger:  logger,
 		config:  &Config{TableName: "test"},
 	}
-	u := NewTagged(base)
+	u := NewTagged(base, "")
 
 	name := "k8s.production-cl1.nginx_ingress_controller_response_size_bucket?app_kubernetes_io_component=controller&app_kubernetes_io_instance=ingress-nginx&app_kubernetes_io_managed_by=Helm&app_kubernetes_io_name=ingress-nginx&app_kubernetes_io_version=0_32_0&controller_class=nginx&controller_namespace=ingress-nginx&controller_pod=ingress-nginx-controller-d2ppr&helm_sh_chart=ingress-nginx-2_3_0&host=vm1_test_int&ingress=web-ingress&instance=192_168_0.10&job=kubernetes-service-endpoints&kubernetes_name=ingress-nginx-controller-metrics&kubernetes_namespace=ingress-nginx&kubernetes_node=k8s-n03&le=10&method=GET&namespace=web-app&path=_&service=web-app&status=500"
 	for i := 0; i < b.N; i++ {

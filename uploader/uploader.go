@@ -17,7 +17,7 @@ type UploaderWithReset interface {
 	Reset()
 }
 
-func New(path string, name string, config *Config) (Uploader, error) {
+func New(path string, name, dataDir string, config *Config) (Uploader, error) {
 	c := *config
 
 	if c.Threads < 1 {
@@ -48,17 +48,17 @@ func New(path string, name string, config *Config) (Uploader, error) {
 	case "points":
 		res = NewPoints(u, false)
 	case "tree":
-		res = NewTree(u)
+		res = NewTree(u, dataDir)
 	case "points-reverse":
 		res = NewPoints(u, true)
 	case "series":
-		res = NewSeries(u, false)
+		res = NewSeries(u, false, dataDir)
 	case "series-reverse":
-		res = NewSeries(u, true)
+		res = NewSeries(u, true, dataDir)
 	case "tagged":
-		res = NewTagged(u)
+		res = NewTagged(u, dataDir)
 	case "index":
-		res = NewIndex(u)
+		res = NewIndex(u, dataDir)
 	default:
 		return nil, fmt.Errorf("unknown uploader type %#v", c.Type)
 	}

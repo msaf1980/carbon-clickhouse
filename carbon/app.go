@@ -224,7 +224,7 @@ func (app *App) Start() (err error) {
 		if err := os.MkdirAll(uploaderDir, 0755); err != nil {
 			return err
 		}
-		up, err := uploader.New(uploaderDir, uploaderName, uploaderConfig)
+		up, err := uploader.New(uploaderDir, uploaderName, conf.Data.Path, uploaderConfig)
 		if err != nil {
 			return err
 		}

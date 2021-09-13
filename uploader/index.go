@@ -22,9 +22,9 @@ const ReverseTreeLevelOffset = 30000
 
 const DefaultTreeDate = 42 // 1970-02-12
 
-func NewIndex(base *Base) *Index {
+func NewIndex(base *Base, dataDir string) *Index {
 	u := &Index{}
-	u.cached = newCached(base)
+	u.cached = newCached(base, dataDir)
 	u.cached.parser = u.parseFile
 	return u
 }
@@ -72,7 +72,7 @@ LineLoop:
 			continue
 		}
 
-		key := hashFunc(strconv.Itoa(int(reader.Days())) + ":" + unsafeString(name))
+		key := strconv.Itoa(int(reader.Days())) + ":" + hashFunc(unsafeString(name))
 
 		if u.existsCache.Exists(key) {
 			continue LineLoop

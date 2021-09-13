@@ -17,9 +17,9 @@ type Series struct {
 var _ Uploader = &Series{}
 var _ UploaderWithReset = &Series{}
 
-func NewSeries(base *Base, reverse bool) *Series {
+func NewSeries(base *Base, reverse bool, dataDir string) *Series {
 	u := &Series{}
-	u.cached = newCached(base)
+	u.cached = newCached(base, dataDir)
 	u.cached.parser = u.parseFile
 	u.isReverse = reverse
 	return u
