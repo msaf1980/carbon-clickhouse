@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"runtime/debug"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -18,9 +19,10 @@ type DebugCacheDumper interface {
 
 type cached struct {
 	*Base
-	existsCache CMap // store known keys and don't load it to clickhouse tree
-	parser      func(filename string, out io.Writer) (*uploaderStat, map[string]bool, error)
-	expired     uint32 // atomic counter
+	existsCache  CMap // store known keys and don't load it to clickhouse tree
+	parser       func(filename string, out io.Writer) (*uploaderStat, map[string]bool, error)
+	parserNative func(filename string) (*uploaderStat, map[string]bool, error)
+	expired      uint32 // atomic counter
 }
 
 func newCached(base *Base) *cached {
@@ -66,46 +68,52 @@ func (u *cached) upload(ctx context.Context, logger *zap.Logger, filename string
 	var err error
 	var newSeries map[string]bool
 
-	pipeReader, pipeWriter := io.Pipe()
-	writer := bufio.NewWriter(pipeWriter)
 	startTime := time.Now()
 
-	uploadResult := make(chan error, 1)
-
-	u.Go(func(ctx context.Context) {
-		err = u.insertRowBinary(
-			u.query,
-			pipeReader,
-		)
-		uploadResult <- err
-		if err != nil {
-			pipeReader.CloseWithError(err)
+	if strings.HasPrefix(u.config.URL, "tcp://") {
+		if stat, newSeries, err = u.parserNative(filename); err != nil {
+			return stat, err
 		}
-	})
+	} else {
+		pipeReader, pipeWriter := io.Pipe()
+		writer := bufio.NewWriter(pipeWriter)
 
-	stat, newSeries, err = u.parser(filename, writer)
-	if err == nil {
-		err = writer.Flush()
+		uploadResult := make(chan error, 1)
+
+		u.Go(func(ctx context.Context) {
+			err = u.insertRowBinary(
+				u.query,
+				pipeReader,
+			)
+			uploadResult <- err
+			if err != nil {
+				pipeReader.CloseWithError(err)
+			}
+		})
+
+		stat, newSeries, err = u.parser(filename, writer)
+		if err == nil {
+			err = writer.Flush()
+		}
+		pipeWriter.CloseWithError(err)
+
+		var uploadErr error
+
+		select {
+		case uploadErr = <-uploadResult:
+			// pass
+		case <-ctx.Done():
+			return stat, fmt.Errorf("upload aborted")
+		}
+
+		if err != nil {
+			return stat, err
+		}
+
+		if uploadErr != nil {
+			return stat, uploadErr
+		}
 	}
-	pipeWriter.CloseWithError(err)
-
-	var uploadErr error
-
-	select {
-	case uploadErr = <-uploadResult:
-		// pass
-	case <-ctx.Done():
-		return stat, fmt.Errorf("upload aborted")
-	}
-
-	if err != nil {
-		return stat, err
-	}
-
-	if uploadErr != nil {
-		return stat, uploadErr
-	}
-
 	// commit new series
 	u.existsCache.Merge(newSeries, startTime.Unix())
 
