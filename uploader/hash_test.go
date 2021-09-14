@@ -1,8 +1,6 @@
 package uploader
 
 import (
-	"fmt"
-	"math/rand"
 	"testing"
 
 	"github.com/lomik/carbon-clickhouse/helper/escape"
@@ -56,74 +54,74 @@ func Benchmark_xxH3_64(b *testing.B) {
 	}
 }
 
-func TestCollisionCityHash64(t *testing.T) {
+// func TestCollisionCityHash64(t *testing.T) {
 
-	hashes := make(map[string]struct{})
-	max := 50000000
+// 	hashes := make(map[string]struct{})
+// 	max := 50000000
 
-	var b [40]byte
-	for i := 0; i < max; i++ {
+// 	var b [40]byte
+// 	for i := 0; i < max; i++ {
 
-		// if i%10000000 == 0 {
-		// 	t.Logf("iteration: %d\n", i)
-		// }
+// 		// if i%10000000 == 0 {
+// 		// 	t.Logf("iteration: %d\n", i)
+// 		// }
 
-		_, err := rand.Read(b[:])
-		if err != nil {
-			t.Error(err)
-			t.Fail()
-		}
+// 		_, err := rand.Read(b[:])
+// 		if err != nil {
+// 			t.Error(err)
+// 			t.Fail()
+// 		}
 
-		result := cityHash64(unsafeString(b[:]))
+// 		result := cityHash64(unsafeString(b[:]))
 
-		// Sanity check
-		// if i < 5 {
-		// 	fmt.Println(i, result)
-		// }
+// 		// Sanity check
+// 		// if i < 5 {
+// 		// 	fmt.Println(i, result)
+// 		// }
 
-		if _, ok := hashes[result]; ok {
-			t.Logf("%s == %v", result, b)
-			t.Errorf("Found collision after %d searches", i)
-		}
+// 		if _, ok := hashes[result]; ok {
+// 			t.Logf("%s == %v", result, b)
+// 			t.Errorf("Found collision after %d searches", i)
+// 		}
 
-		hashes[result] = struct{}{}
-	}
+// 		hashes[result] = struct{}{}
+// 	}
 
-	fmt.Println("no collisions found", max)
-}
+// 	fmt.Println("no collisions found", max)
+// }
 
-func TestCollisionXXH3_64(t *testing.T) {
+// func TestCollisionXXH3_64(t *testing.T) {
 
-	hashes := make(map[string]struct{})
-	max := 50000000
+// 	hashes := make(map[string]struct{})
+// 	max := 50000000
 
-	var b [40]byte
-	for i := 0; i < max; i++ {
+// 	var b [40]byte
+// 	for i := 0; i < max; i++ {
 
-		// if i%10000000 == 0 {
-		// 	t.Logf("iteration: %d\n", i)
-		// }
+// 		// if i%10000000 == 0 {
+// 		// 	t.Logf("iteration: %d\n", i)
+// 		// }
 
-		_, err := rand.Read(b[:])
-		if err != nil {
-			t.Error(err)
-			t.Fail()
-		}
+// 		_, err := rand.Read(b[:])
+// 		if err != nil {
+// 			t.Error(err)
+// 			t.Fail()
+// 		}
 
-		result := xxh3Hash64(unsafeString(b[:]))
+// 		result := xxh3Hash64(unsafeString(b[:]))
 
-		// Sanity check
-		// if i < 5 {
-		// 	fmt.Println(i, result)
-		// }
+// 		// Sanity check
+// 		// if i < 5 {
+// 		// 	fmt.Println(i, result)
+// 		// }
 
-		if _, ok := hashes[result]; ok {
-			t.Logf("%s == %v", result, b)
-			t.Errorf("Found collision after %d searches", i)
-		}
+// 		if _, ok := hashes[result]; ok {
+// 			t.Logf("%s == %v", result, b)
+// 			t.Errorf("Found collision after %d searches", i)
+// 		}
 
-		hashes[result] = struct{}{}
-	}
+// 		hashes[result] = struct{}{}
+// 	}
 
-	fmt.Println("no collisions found", max)
-}
+// 	fmt.Println("no collisions found", max)
+// }
