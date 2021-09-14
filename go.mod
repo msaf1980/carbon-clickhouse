@@ -4,6 +4,7 @@ go 1.15
 
 require (
 	github.com/BurntSushi/toml v0.3.1
+	github.com/ClickHouse/clickhouse-go v1.4.7
 	github.com/frankban/quicktest v1.11.1 // indirect
 	github.com/gogo/protobuf v1.0.0
 	github.com/golang/protobuf v1.4.1
