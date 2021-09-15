@@ -38,8 +38,6 @@ github.com/lomik/zapwriter
 # github.com/msaf1980/go-stringutils v0.0.10
 ## explicit
 github.com/msaf1980/go-stringutils
-# github.com/msaf1980/stringutils v0.0.2-0.20201020141843-69ada32f5dc0
-## explicit
 # github.com/pierrec/lz4 v2.5.2+incompatible
 ## explicit
 github.com/pierrec/lz4
@@ -51,6 +49,9 @@ github.com/pmezard/go-difflib/difflib
 # github.com/stretchr/testify v1.7.0
 ## explicit
 github.com/stretchr/testify/assert
+# github.com/zeebo/xxh3 v0.13.0
+## explicit
+github.com/zeebo/xxh3
 # github.com/zentures/cityhash v0.0.0-20131128155616-cdd6a94144ab
 ## explicit
 github.com/zentures/cityhash
@@ -76,7 +77,9 @@ golang.org/x/net/http2/hpack
 golang.org/x/net/idna
 golang.org/x/net/internal/timeseries
 golang.org/x/net/trace
-# golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a
+# golang.org/x/sys v0.0.0-20200727154430-2d971f7391a4
+golang.org/x/sys/cpu
+golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
 # golang.org/x/text v0.3.3
 ## explicit
