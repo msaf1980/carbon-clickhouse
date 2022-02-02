@@ -22,7 +22,7 @@ import (
 )
 
 // Version of carbon-clickhouse
-const Version = "0.11.1"
+const Version = "0.11.2"
 
 func httpServe(addr string) (func(), error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
@@ -137,7 +137,7 @@ func main() {
 
 	go func() {
 		c := make(chan os.Signal, 1)
-		signal.Notify(c, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGHUP)
+		signal.Notify(c, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 
 		for {
 			s := <-c
@@ -149,6 +149,9 @@ func main() {
 				mainLogger.Info("SIGUSR2 received. Ignoring")
 			case syscall.SIGHUP:
 				mainLogger.Info("SIGHUP received. Ignoring")
+			case syscall.SIGTERM, syscall.SIGINT:
+				mainLogger.Info("shutting down")
+				app.Stop()
 			}
 		}
 	}()
