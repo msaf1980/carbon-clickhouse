@@ -20,6 +20,8 @@ type Config struct {
 	IgnoredPatterns      []string            `toml:"ignored-patterns,omitempty"` // points, points-reverse
 	CompressData         bool                `toml:"compress-data"`              //compress data while sending to clickhouse
 	IgnoredTaggedMetrics []string            `toml:"ignored-tagged-metrics"`     // for tagged table; create only `__name__` tag for these metrics and ignore others
+	Tags                 []string            `toml:"tags"`                       // for tagged table; save tags values as additional fields
+	TagsSkip             bool                `toml:"tags-skip"`                  // for tagged table; skip write tag value as induvidual record (don't skip write in tags array for other tags)
 	Hash                 string              `toml:"hash"`                       // in index uploader store hash in memory instead of full metric
 	DisableDailyIndex    bool                `toml:"disable-daily-index"`        // do not calculate and upload daily index to ClickHouse
 	hashFunc             func(string) string `toml:"-"`
