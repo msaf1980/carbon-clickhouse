@@ -34,6 +34,14 @@ func (u *Index) parseName(name, reverseName []byte, treeDate, days uint16, versi
 	var index, l int
 	var p []byte
 
+	sizeIndex := 2 * (RowBinary.SIZE_INT16 /* days */ +
+		RowBinary.SIZE_INT32 + len(name) +
+		RowBinary.SIZE_INT32) //  version
+
+	if sizeIndex >= wb.FreeSize() {
+		return errBufOverflow
+	}
+
 	level := pathLevel(name)
 
 	// Tree
@@ -46,8 +54,17 @@ func (u *Index) parseName(name, reverseName []byte, treeDate, days uint16, versi
 	l = level
 	for l--; l > 0; l-- {
 		index = bytes.LastIndexByte(p, '.')
-		if newUniq[unsafeString(p[:index+1])] {
+		segment := p[:index+1]
+		if newUniq[unsafeString(segment)] {
 			break
+		}
+
+		sizeIndex += RowBinary.SIZE_INT16 /* days */ +
+			RowBinary.SIZE_INT32 + len(segment) +
+			RowBinary.SIZE_INT32 //  version
+
+		if sizeIndex >= wb.FreeSize() {
+			return errBufOverflow
 		}
 
 		newUniq[string(p[:index+1])] = true
