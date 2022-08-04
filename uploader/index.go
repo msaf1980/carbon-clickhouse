@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lomik/carbon-clickhouse/helper/RowBinary"
+	"go.uber.org/zap"
 )
 
 type Index struct {
@@ -29,6 +30,62 @@ func NewIndex(base *Base) *Index {
 	return u
 }
 
+func (u *Index) parseName(name, reverseName []byte, treeDate, days uint16, version uint32, disableDailyIndex bool, newUniq map[string]bool, wb *RowBinary.WriteBuffer) error {
+	var index, l int
+	var p []byte
+
+	level := pathLevel(name)
+
+	// Tree
+	wb.WriteUint16(treeDate)
+	wb.WriteUint32(uint32(level + TreeLevelOffset))
+	wb.WriteBytes(name)
+	wb.WriteUint32(version)
+
+	p = name
+	l = level
+	for l--; l > 0; l-- {
+		index = bytes.LastIndexByte(p, '.')
+		if newUniq[unsafeString(p[:index+1])] {
+			break
+		}
+
+		newUniq[string(p[:index+1])] = true
+
+		wb.WriteUint16(treeDate)
+		wb.WriteUint32(uint32(l + TreeLevelOffset))
+		wb.WriteBytes(p[:index+1])
+		wb.WriteUint32(version)
+
+		p = p[:index]
+	}
+
+	// Write data with treeDate
+	wb.WriteUint16(treeDate)
+	wb.WriteUint32(uint32(level + ReverseTreeLevelOffset))
+	wb.WriteBytes(reverseName)
+	wb.WriteUint32(version)
+
+	// Skip daily index
+	if disableDailyIndex {
+		return nil
+	}
+
+	// Direct path with date
+	wb.WriteUint16(days)
+	wb.WriteUint32(uint32(level))
+	wb.WriteBytes(name)
+	wb.WriteUint32(version)
+
+	// Reverse path with date
+	wb.WriteUint16(days)
+	wb.WriteUint32(uint32(level + ReverseLevelOffset))
+	wb.WriteBytes(reverseName)
+	wb.WriteUint32(version)
+
+	return nil
+}
+
 func (u *Index) parseFile(filename string, out io.Writer) (uint64, map[string]bool, error) {
 	var reader *RowBinary.Reader
 	var err error
@@ -44,9 +101,6 @@ func (u *Index) parseFile(filename string, out io.Writer) (uint64, map[string]bo
 	newSeries := make(map[string]bool)
 	newUniq := make(map[string]bool)
 	wb := RowBinary.GetWriteBuffer()
-
-	var level, index, l int
-	var p []byte
 
 	treeDate := uint16(DefaultTreeDate)
 	if !u.config.TreeDate.IsZero() {
@@ -72,7 +126,8 @@ LineLoop:
 			continue
 		}
 
-		key := hashFunc(strconv.Itoa(int(reader.Days())) + ":" + unsafeString(name))
+		nameStr := unsafeString(name)
+		key := hashFunc(strconv.Itoa(int(reader.Days())) + ":" + nameStr)
 
 		if u.existsCache.Exists(key) {
 			continue LineLoop
@@ -81,76 +136,29 @@ LineLoop:
 		if newSeries[key] {
 			continue LineLoop
 		}
-		n++
-
-		level = pathLevel(name)
-		days := reader.Days()
-
-		wb.Reset()
 
 		newSeries[key] = true
 
-		// Tree
-		wb.WriteUint16(treeDate)
-		wb.WriteUint32(uint32(level + TreeLevelOffset))
-		wb.WriteBytes(name)
-		wb.WriteUint32(version)
+		n++
+		days := reader.Days()
+		wb.Reset()
 
-		p = name
-		l = level
-		for l--; l > 0; l-- {
-			index = bytes.LastIndexByte(p, '.')
-			if newUniq[unsafeString(p[:index+1])] {
-				break
-			}
-
-			newUniq[string(p[:index+1])] = true
-
-			wb.WriteUint16(treeDate)
-			wb.WriteUint32(uint32(l + TreeLevelOffset))
-			wb.WriteBytes(p[:index+1])
-			wb.WriteUint32(version)
-
-			p = p[:index]
-		}
-
-		// Reverse path without date
-		l = len(name)
+		l := len(name)
 		if l > len(reverseNameBuf) {
 			reverseNameBuf = make([]byte, len(name)*2)
 		}
-		reverseName := reverseNameBuf[0:l]
+		reverseName := reverseNameBuf[:len(name)]
 		RowBinary.ReverseBytesTo(reverseName, name)
 
-		wb.WriteUint16(treeDate)
-		wb.WriteUint32(uint32(level + ReverseTreeLevelOffset))
-		wb.WriteBytes(reverseName)
-		wb.WriteUint32(version)
-
-		// Write data with treeDate
-		_, err = out.Write(wb.Bytes())
+		err = u.parseName(name, reverseName, treeDate, days, version, u.config.DisableDailyIndex, newUniq, wb)
 		if err != nil {
-			return n, nil, err
-		}
-
-		// Skip daily index
-		if u.config.DisableDailyIndex {
+			u.logger.Warn("parse",
+				zap.String("metric", nameStr), zap.String("type", "tagged"), zap.String("name", filename), zap.Error(err),
+			)
 			continue LineLoop
 		}
 
-		// Direct path with date
-		wb.WriteUint16(days)
-		wb.WriteUint32(uint32(level))
-		wb.WriteBytes(name)
-		wb.WriteUint32(version)
-
-		// Reverse path with date
-		wb.WriteUint16(days)
-		wb.WriteUint32(uint32(level + ReverseLevelOffset))
-		wb.WriteBytes(reverseName)
-		wb.WriteUint32(version)
-
-		// Write data with daily index
+		// Write data
 		_, err = out.Write(wb.Bytes())
 		if err != nil {
 			return n, nil, err
